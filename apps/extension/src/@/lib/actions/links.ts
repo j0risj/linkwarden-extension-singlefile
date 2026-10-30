@@ -1,16 +1,167 @@
 import captureScreenshot from "../screenshot.ts";
 import { bookmarkFormValues } from "../validators/bookmarkForm.ts";
-import axios from "axios";
+import axios, { AxiosError } from "axios";
 // import { bookmarkMetadata } from '../cache.ts';
+import { getTags } from "./tags.ts";
+
+export interface SaveSingleFileOptions {
+  enabled: boolean;
+  archivalTagName: string;
+  capturePromise: Promise<{ html: string; blob: Blob }> | null;
+  startCapture: () => Promise<{ html: string; blob: Blob }>;
+  onFallbackNeeded?: () => void;
+}
+
+const withRetry = async <T>(fn: () => Promise<T>, attempts = 3): Promise<T> => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (error instanceof AxiosError && error.response) throw error;
+      if (attempt < attempts - 1)
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+};
+
+const uploadArchive = async (
+  baseUrl: string,
+  apiKey: string,
+  linkId: number,
+  format: number,
+  file: Blob,
+  filename: string
+) => {
+  const formData = new FormData();
+  formData.append("file", file, filename);
+  return withRetry(() =>
+    axios.post(
+      `${baseUrl}/api/v1/archives/${linkId}?format=${format}`,
+      formData,
+      {
+        headers: {
+          "Content-Type": "multipart/form-data",
+          Authorization: `Bearer ${apiKey}`,
+        },
+      }
+    )
+  );
+};
+
+const findArchivalTagId = async (
+  baseUrl: string,
+  apiKey: string,
+  name: string
+): Promise<number | undefined> => {
+  let cursor: number | undefined = 0;
+  while (cursor !== undefined && cursor !== null) {
+    const page = await getTags(baseUrl, apiKey, cursor, name);
+    const found = page.tags.find(
+      (tag) => tag.name.toLowerCase() === name.toLowerCase()
+    );
+    if (found) return found.id;
+    cursor = page.nextCursor ?? undefined;
+  }
+  return undefined;
+};
+
+const verifyDerivedFormats = async (
+  baseUrl: string,
+  apiKey: string,
+  linkId: number,
+  onFallbackNeeded?: () => void
+) => {
+  const headers = { Authorization: `Bearer ${apiKey}` };
+  const deadline = Date.now() + 10 * 60 * 1000;
+  let link: any;
+  while (Date.now() < deadline) {
+    const response = await withRetry(() =>
+      axios.get(`${baseUrl}/api/v1/links/${linkId}`, { headers })
+    );
+    link = response.data.response;
+    if (link?.lastPreserved) break;
+    await new Promise((r) => setTimeout(r, 10000));
+  }
+  if (!link?.lastPreserved) return;
+  const unavailable = [link.readable, link.image, link.pdf].some(
+    (format) => format === "unavailable"
+  );
+  if (unavailable) onFallbackNeeded?.();
+};
 
 export async function postLink(
   baseUrl: string,
   uploadImage: boolean,
   data: bookmarkFormValues,
   setState: (state: "capturing" | "uploading" | null) => void,
-  apiKey: string
+  apiKey: string,
+  singlefile?: SaveSingleFileOptions
 ) {
   const url = `${baseUrl}/api/v1/links`;
+
+  let singleFileResult: { html: string; blob: Blob } | null = null;
+
+  if (singlefile?.enabled) {
+    setState("capturing");
+    singleFileResult = singlefile.capturePromise
+      ? await singlefile.capturePromise
+      : await singlefile.startCapture();
+    setState("uploading");
+
+    const archivalTagId = await findArchivalTagId(
+      baseUrl,
+      apiKey,
+      singlefile.archivalTagName
+    );
+    if (!archivalTagId) {
+      throw new Error(
+        `Archival tag "${singlefile.archivalTagName}" not found. Create it in Linkwarden with archiveAsMonolith disabled, then try again.`
+      );
+    }
+
+    const tags = [...(data.tags ?? [])];
+    if (
+      !tags.some(
+        (tag) =>
+          tag.name.toLowerCase() === singlefile.archivalTagName.toLowerCase()
+      )
+    ) {
+      tags.push({ id: archivalTagId, name: singlefile.archivalTagName });
+    }
+
+    const link = await axios.post(
+      url,
+      { ...data, tags },
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+      }
+    );
+
+    const { id } = link.data.response;
+    await uploadArchive(
+      baseUrl,
+      apiKey,
+      id,
+      4,
+      singleFileResult?.blob as Blob,
+      "page.html"
+    );
+
+    if (uploadImage) {
+      const screenshot = await captureScreenshot();
+      await uploadArchive(baseUrl, apiKey, id, 0, screenshot, "screenshot.png");
+    }
+
+    setState(null);
+    void verifyDerivedFormats(baseUrl, apiKey, id, singlefile.onFallbackNeeded);
+
+    return link;
+  }
 
   if (uploadImage) {
     setState("capturing");
@@ -24,17 +175,7 @@ export async function postLink(
     });
 
     const { id } = link.data.response;
-    const archiveUrl = `${baseUrl}/api/v1/archives/${id}?format=0`;
-
-    const formData = new FormData();
-    formData.append("file", screenshot, "screenshot.png");
-
-    await axios.post(archiveUrl, formData, {
-      headers: {
-        "Content-Type": "multipart/form-data",
-        Authorization: `Bearer ${apiKey}`,
-      },
-    });
+    await uploadArchive(baseUrl, apiKey, id, 0, screenshot, "screenshot.png");
 
     setState(null);
 
@@ -98,19 +239,6 @@ export async function deleteLinkFetch(
     },
   });
 }
-
-// export async function getLinksFetch(
-//   baseUrl: string,
-//   apiKey: string
-// ): Promise<{ response: bookmarkMetadata[] }> {
-//   const url = `${baseUrl}/api/v1/links`;
-//   const response = await fetch(url, {
-//     headers: {
-//       Authorization: `Bearer ${apiKey}`,
-//     },
-//   });
-//   return await response.json();
-// }
 
 export async function checkLinkExists(
   baseUrl: string,

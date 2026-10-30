@@ -35,15 +35,27 @@ import { getShouldUseTagSearch, getTags } from "../lib/actions/tags.ts";
 import { ExternalLink } from "lucide-react";
 import { Checkbox } from "./ui/CheckBox.tsx";
 import { Label } from "./ui/Label.tsx";
+import { captureSingleFile, isCapturableUrl } from "../lib/singlefile.ts";
+import { getSinglefileConfig } from "../lib/singlefileConfig.ts";
 
 // The popup is torn down every time it loses focus, so remember whether the
 // user had the extra options expanded and bring them back that way.
 const MORE_OPTIONS_KEY = "lw_more_options_open";
+const SINGLEFILE_CHECKBOX_KEY = "lw_singlefile_checkbox";
 
 const BookmarkForm = () => {
   const [openOptions, setOpenOptions] = useState<boolean>(false);
   const [openCollections, setOpenCollections] = useState<boolean>(false);
   const [uploadImage, setUploadImage] = useState<boolean>(false);
+  const [saveSingleFile, setSaveSingleFile] = useState<boolean>(false);
+  const [singleFileSupported, setSingleFileSupported] = useState<boolean>(true);
+  const [capturePromise, setCapturePromise] = useState<Promise<{
+    html: string;
+    blob: Blob;
+  }> | null>(null);
+  const [singlefileConfig, setSinglefileConfig] = useState<Awaited<
+    ReturnType<typeof getSinglefileConfig>
+  > | null>(null);
   const [state, setState] = useState<"capturing" | "uploading" | null>(null);
   const [tagSearch, setTagSearch] = useState<string>("");
 
@@ -66,6 +78,29 @@ const BookmarkForm = () => {
     if (s === "indeterminate") return;
     setUploadImage(s);
     form.setValue("image", s ? "png" : undefined);
+  };
+
+  const handleSingleFileChange = (s: boolean | "indeterminate") => {
+    if (s === "indeterminate") return;
+    setSaveSingleFile(s);
+    void setStorageItem(SINGLEFILE_CHECKBOX_KEY, s ? "true" : "false");
+    if (s && !capturePromise) {
+      setCapturePromise(
+        captureSingleFile().catch((error) => {
+          setCapturePromise(null);
+          setSaveSingleFile(false);
+          void setStorageItem(SINGLEFILE_CHECKBOX_KEY, "false");
+          toast({
+            title: "Capture failed",
+            description: `${
+              error instanceof Error ? error.message : "Could not capture the page."
+            } (${tabInfo?.url ?? ""})`,
+            variant: "destructive",
+          });
+          throw error;
+        })
+      );
+    }
   };
 
   const handleOptionsToggle = () => {
@@ -95,7 +130,23 @@ const BookmarkForm = () => {
         uploadImage,
         values,
         setState,
-        config?.apiKey as string
+        config?.apiKey as string,
+        saveSingleFile && singlefileConfig
+          ? {
+              enabled: true,
+              archivalTagName: singlefileConfig.archivalTagName,
+              capturePromise,
+              startCapture: () => captureSingleFile(tabInfo?.id),
+              onFallbackNeeded: () => {
+                toast({
+                  title: "Formats generated server-side",
+                  description:
+                    "The worker may have read the link before the upload finished; re-archive if needed.",
+                  variant: "destructive",
+                });
+              },
+            }
+          : undefined
       );
 
       return;
@@ -144,6 +195,11 @@ const BookmarkForm = () => {
 
       setTabInfo(t);
       setConfig(c);
+      setSingleFileSupported(isCapturableUrl(t.url));
+      setSaveSingleFile(
+        (await getStorageItem(SINGLEFILE_CHECKBOX_KEY)) === "true"
+      );
+      setSinglefileConfig(await getSinglefileConfig());
 
       form.setValue("url", t.url ? t.url : "");
       form.setValue("name", t.title ? t.title : "");
@@ -165,27 +221,6 @@ const BookmarkForm = () => {
   }, []);
 
   const { handleSubmit, control } = form;
-
-  // useEffect(() => {
-  //   const syncBookmarks = async () => {
-  //     try {
-  //       const { syncBookmarks, baseUrl, defaultCollection } = await getConfig();
-  //       form.setValue('collection', {
-  //         name: defaultCollection,
-  //       });
-  //       if (!syncBookmarks) {
-  //         return;
-  //       }
-  //       if (await isConfigured()) {
-  //         await saveLinksInCache(baseUrl);
-  //         await syncLocalBookmarks(baseUrl);
-  //       }
-  //     } catch (error) {
-  //       console.error(error);
-  //     }
-  //   };
-  //   syncBookmarks();
-  // }, [form]);
 
   const {
     isLoading: loadingCollections,
@@ -279,13 +314,34 @@ const BookmarkForm = () => {
           />
 
           {!openOptions && (
-            <Label className="flex items-center gap-2 w-fit cursor-pointer">
-              <Checkbox
-                checked={uploadImage}
-                onCheckedChange={handleCheckedChange}
-              />
-              Upload image from browser
-            </Label>
+            <>
+              <Label className="flex items-center gap-2 w-fit cursor-pointer">
+                <Checkbox
+                  checked={uploadImage}
+                  onCheckedChange={handleCheckedChange}
+                />
+                Upload image from browser
+              </Label>
+              <Label
+                className={`flex items-center gap-2 w-fit ${
+                  singleFileSupported
+                    ? "cursor-pointer"
+                    : "cursor-not-allowed opacity-50"
+                }`}
+                title={
+                  singleFileSupported
+                    ? undefined
+                    : "This page cannot be saved as a SingleFile snapshot"
+                }
+              >
+                <Checkbox
+                  checked={saveSingleFile}
+                  disabled={!singleFileSupported}
+                  onCheckedChange={handleSingleFileChange}
+                />
+                Save SingleFile
+              </Label>
+            </>
           )}
 
           {openOptions && (
@@ -363,13 +419,34 @@ const BookmarkForm = () => {
               />
 
               {openOptions && (
-                <Label className="flex items-center gap-2 w-fit cursor-pointer">
-                  <Checkbox
-                    checked={uploadImage}
-                    onCheckedChange={handleCheckedChange}
-                  />
-                  Upload image from browser
-                </Label>
+                <>
+                  <Label className="flex items-center gap-2 w-fit cursor-pointer">
+                    <Checkbox
+                      checked={uploadImage}
+                      onCheckedChange={handleCheckedChange}
+                    />
+                    Upload image from browser
+                  </Label>
+                  <Label
+                    className={`flex items-center gap-2 w-fit ${
+                      singleFileSupported
+                        ? "cursor-pointer"
+                        : "cursor-not-allowed opacity-50"
+                    }`}
+                    title={
+                      singleFileSupported
+                        ? undefined
+                        : "This page cannot be saved as a SingleFile snapshot"
+                    }
+                  >
+                    <Checkbox
+                      checked={saveSingleFile}
+                      disabled={!singleFileSupported}
+                      onCheckedChange={handleSingleFileChange}
+                    />
+                    Save SingleFile
+                  </Label>
+                </>
               )}
             </>
           )}

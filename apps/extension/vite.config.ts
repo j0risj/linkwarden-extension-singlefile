@@ -85,6 +85,9 @@ function singleFileCore(): Plugin {
 
 export default defineConfig({
   plugins: [react(), manifest(), singleFileCore()],
+  define: {
+    __BUILD_VERSION__: JSON.stringify(process.env.GIT_HASH || "dev"),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

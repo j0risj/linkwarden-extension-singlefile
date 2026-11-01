@@ -51,6 +51,12 @@ function App() {
             <h1 className="text-lg">
               {showSettings ? "Settings" : "Add Link"}
             </h1>
+            <span
+              className="text-[10px] text-neutral-500 dark:text-neutral-500 ml-1"
+              title="Extension build revision"
+            >
+              {__BUILD_VERSION__}
+            </span>
           </div>
           <div className="flex items-center justify-center space-x-2">
             <ModeToggle />

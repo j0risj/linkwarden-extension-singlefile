@@ -77,9 +77,14 @@ async function captureInTab(tabId: number): Promise<string> {
         }
       };
       log("calling getPageData");
+      // removeFrames: the frame-tree processor handshakes with subframes via
+      // postMessage, which does not work from a scripting.executeScript
+      // context (sandboxed world), so frames would hang the capture forever.
+      // With this flag iframes are removed from the snapshot instead.
       const pageData = await singleFile.getPageData({
         compressHTML: true,
         includeInfobar: false,
+        removeFrames: true,
         onprogress: async (event: SingleFileProgressEvent) => {
           if (
             event.type === event.RESOURCES_INITIALIZED &&

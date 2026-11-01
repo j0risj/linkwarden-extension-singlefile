@@ -56,25 +56,6 @@ const SinglefileSettings = () => {
         >
           <FormField
             control={control}
-            name="archivalTagName"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Archival tag name</FormLabel>
-                <FormDescription>
-                  Tag added to every link saved with "Save SingleFile". Create
-                  this tag in Linkwarden beforehand with the archival settings
-                  you want (archiveAsMonolith disabled so the server does not
-                  overwrite the uploaded HTML).
-                </FormDescription>
-                <FormControl>
-                  <Input placeholder="singlefile-capture" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={control}
             name="maxUploadMB"
             render={({ field }) => (
               <FormItem>

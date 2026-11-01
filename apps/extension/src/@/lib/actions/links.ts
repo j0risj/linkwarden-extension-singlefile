@@ -2,11 +2,9 @@ import captureScreenshot from "../screenshot.ts";
 import { bookmarkFormValues } from "../validators/bookmarkForm.ts";
 import axios, { AxiosError } from "axios";
 // import { bookmarkMetadata } from '../cache.ts';
-import { getTags } from "./tags.ts";
 
 export interface SaveSingleFileOptions {
   enabled: boolean;
-  archivalTagName: string;
   maxUploadBytes: number;
   capturePromise: Promise<{ html: string; blob: Blob }> | null;
   startCapture: () => Promise<{ html: string; blob: Blob }>;
@@ -50,23 +48,6 @@ const uploadArchive = async (
       }
     )
   );
-};
-
-const findArchivalTagId = async (
-  baseUrl: string,
-  apiKey: string,
-  name: string
-): Promise<number | undefined> => {
-  let cursor: number | undefined = 0;
-  while (cursor !== undefined && cursor !== null) {
-    const page = await getTags(baseUrl, apiKey, cursor, name);
-    const found = page.tags.find(
-      (tag) => tag.name.toLowerCase() === name.toLowerCase()
-    );
-    if (found) return found.id;
-    cursor = page.nextCursor ?? undefined;
-  }
-  return undefined;
 };
 
 const verifyDerivedFormats = async (
@@ -120,80 +101,40 @@ export async function postLink(
     }
     setState("uploading");
 
-    let archivalTagId: number | undefined;
-    try {
-      archivalTagId = await findArchivalTagId(
-        baseUrl,
-        apiKey,
-        singlefile.archivalTagName
-      );
-    } catch (error) {
-      throw new Error(
-        `Saving aborted while looking up the archival tag "${singlefile.archivalTagName}": ${
-          error instanceof Error ? error.message : String(error)
-        }. Check that your Linkwarden instance is reachable. `
-      );
-    }
-    if (!archivalTagId) {
-      throw new Error(
-        `Saving aborted: archival tag "${singlefile.archivalTagName}" was ` +
-          "not found. Create it in Linkwarden with archiveAsMonolith disabled, " +
-          "then try again."
-      );
-    }
-
-    const tags = [...(data.tags ?? [])];
-    if (
-      !tags.some(
-        (tag) =>
-          tag.name.toLowerCase() === singlefile.archivalTagName.toLowerCase()
-      )
-    ) {
-      tags.push({ id: archivalTagId, name: singlefile.archivalTagName });
-    }
-
+    // Upload-first flow: POST /api/v1/archives?format=4 creates the link and
+    // stores the snapshot in one atomic request (this is the endpoint the
+    // SingleFile browser extension targets). The server pins lastPreserved to
+    // the epoch until the file is on disk, so the worker can never process the
+    // link mid-upload; afterwards lastPreserved is null and the worker derives
+    // the other formats from the uploaded snapshot. The link starts in the
+    // default collection with a title extracted from the snapshot, and the
+    // dialog's metadata is applied with a PUT right after.
     let link;
     try {
-      link = await axios.post(
-        url,
-        { ...data, tags },
-        {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-          },
-        }
-      );
-    } catch (error) {
-      throw new Error(
-        `Saving aborted while creating the link: ${
-          error instanceof AxiosError
-            ? `${error.response?.statusText ?? ""} ${JSON.stringify(
-                error.response?.data?.response ?? ""
-              )}`.trim()
-            : error instanceof Error
-              ? error.message
-              : String(error)
-        }`
-      );
-    }
-
-    const { id } = link.data.response;
-    try {
-      await uploadArchive(
-        baseUrl,
-        apiKey,
-        id,
-        4,
-        singleFileResult?.blob as Blob,
+      const formData = new FormData();
+      formData.append(
+        "file",
+        singleFileResult.blob,
         "page.html"
       );
+      formData.append("url", data.url);
+      link = await withRetry(() =>
+        axios.post(`${baseUrl}/api/v1/archives?format=4`, formData, {
+          headers: {
+            "Content-Type": "multipart/form-data",
+            Authorization: `Bearer ${apiKey}`,
+          },
+        })
+      );
     } catch (error) {
       throw new Error(
-        `The link was created but uploading the SingleFile snapshot failed: ${
+        `Saving aborted while uploading the SingleFile snapshot: ${
           error instanceof AxiosError
             ? `${error.response?.status ?? ""} ${
                 error.response?.statusText ?? ""
-              } ${JSON.stringify(error.response?.data ?? "")}`.trim()
+              } ${JSON.stringify(
+                error.response?.data?.response ?? ""
+              )}`.trim()
             : error instanceof Error
               ? error.message
               : String(error)
@@ -202,13 +143,79 @@ export async function postLink(
       );
     }
 
+    const created = link.data.response;
+
+    // Apply the dialog's metadata (collection, tags, name, description) to the
+    // freshly created link. The PUT needs the link's current collection owner,
+    // so fetch the link first.
+    try {
+      const current = await withRetry(() =>
+        axios.get(`${baseUrl}/api/v1/links/${created.id}`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        })
+      );
+      const currentLink = current.data.response;
+      const targetCollection = data.collection?.id
+        ? data.collection
+        : undefined;
+
+      await withRetry(() =>
+        axios.put(
+          `${baseUrl}/api/v1/links/${created.id}`,
+          {
+            id: created.id,
+            name: data.name || currentLink.name || "",
+            url: data.url,
+            description: data.description ?? "",
+            collection: {
+              id: targetCollection?.id ?? currentLink.collection.id,
+              ownerId: currentLink.collection.ownerId,
+            },
+            tags: data.tags ?? [],
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+            },
+          }
+        )
+      );
+    } catch (error) {
+      // The snapshot and formats are already safe at this point; only the
+      // metadata (collection/tags/name) is missing. Tell the user instead of
+      // failing the whole save.
+      throw new Error(
+        `The snapshot was saved, but updating its metadata (collection/tags) failed: ${
+          error instanceof AxiosError
+            ? `${error.response?.status ?? ""} ${JSON.stringify(
+                error.response?.data?.response ?? ""
+              )}`.trim()
+            : error instanceof Error
+              ? error.message
+              : String(error)
+        }. The link is in your default collection; edit it in Linkwarden.`
+      );
+    }
+
     if (uploadImage) {
       const screenshot = await captureScreenshot();
-      await uploadArchive(baseUrl, apiKey, id, 0, screenshot, "screenshot.png");
+      await uploadArchive(
+        baseUrl,
+        apiKey,
+        created.id,
+        0,
+        screenshot,
+        "screenshot.png"
+      );
     }
 
     setState(null);
-    void verifyDerivedFormats(baseUrl, apiKey, id, singlefile.onFallbackNeeded);
+    void verifyDerivedFormats(
+      baseUrl,
+      apiKey,
+      created.id,
+      singlefile.onFallbackNeeded
+    );
 
     return link;
   }

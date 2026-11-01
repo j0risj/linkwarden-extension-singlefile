@@ -141,7 +141,6 @@ const BookmarkForm = () => {
         saveSingleFile && singlefileConfig
           ? {
               enabled: true,
-              archivalTagName: singlefileConfig.archivalTagName,
               maxUploadBytes: singlefileConfig.maxUploadMB * 1024 * 1024,
               capturePromise,
               startCapture: () =>

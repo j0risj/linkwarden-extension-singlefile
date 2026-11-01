@@ -2,6 +2,9 @@ import browser from "webextension-polyfill";
 
 export const SINGLEFILE_MAX_BYTES = 10 * 1024 * 1024;
 
+const captureError = (phase: string, detail: string) =>
+  new Error(`Capture failed (${phase}): ${detail}`);
+
 export const isCapturableUrl = (url: string | undefined): boolean =>
   !!url && /^https?:\/\//.test(url);
 
@@ -21,10 +24,19 @@ async function executeScript(tabId: number, func: any, args: any[] = []) {
 // handshake from each subframe, and a subframe without the bundle never
 // answers, hanging the capture forever.
 async function injectSingleFileCore(tabId: number) {
-  await browser.scripting.executeScript({
-    target: { tabId, allFrames: true },
-    files: ["singlefile-core.js"],
-  });
+  try {
+    await browser.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ["singlefile-core.js"],
+    });
+  } catch (error) {
+    throw captureError(
+      "injecting single-file-core",
+      `${error instanceof Error ? error.message : String(error)}. ` +
+        "The tab may be a privileged page (about:, chrome://, the PDF viewer) " +
+        "or the extension lacks host permission for this site."
+    );
+  }
 }
 
 export interface SingleFileProgress {
@@ -109,13 +121,18 @@ async function captureInTab(tabId: number): Promise<string> {
   );
 
   if (typeof html !== "string" || !html) {
-    throw new Error("SingleFile capture returned an empty page.");
+    throw captureError(
+      "capturing the page",
+      "SingleFile produced an empty snapshot. The page may have blocked " +
+        "resource loading, or the tab was navigated away during the capture."
+    );
   }
   return html;
 }
 
 export async function captureSingleFile(
-  tabId?: number
+  tabId?: number,
+  maxBytes: number = SINGLEFILE_MAX_BYTES
 ): Promise<{ html: string; blob: Blob }> {
   const tabs = await browser.tabs.query({
     active: true,
@@ -125,32 +142,60 @@ export async function captureSingleFile(
   const targetTabId = tabId ?? tab?.id;
 
   if (!targetTabId) {
-    throw new Error("Unable to get the current tab.");
+    throw captureError(
+      "finding the tab",
+      "Could not determine the active tab. Try clicking the extension " +
+        "icon again from the tab you want to save."
+    );
   }
   if (!isCapturableUrl(tab?.url)) {
-    throw new Error("This page cannot be saved as a SingleFile snapshot.");
+    throw captureError(
+      "checking the page",
+      `The page URL "${tab?.url ?? ""}" cannot be saved as a SingleFile ` +
+        "snapshot; only http(s) pages are supported."
+    );
   }
 
-  const html = await Promise.race([
-    captureInTab(targetTabId),
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new Error(
-              "Capture timed out after 60 seconds. The page never finished loading resources."
+  let html: string;
+  try {
+    html = await Promise.race([
+      captureInTab(targetTabId),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              captureError(
+                "loading page resources",
+                "Timed out after 60 seconds. The page likely has a resource " +
+                  "that never finished loading (a hanging stylesheet, image, " +
+                  "or font)."
             )
           ),
-        60_000
-      )
-    ),
-  ]);
+          60_000
+        )
+      ),
+    ]);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Capture failed")) {
+      throw error;
+    }
+    throw captureError(
+      "capturing the page",
+      error instanceof Error ? error.message : String(error)
+    );
+  }
   const blob = new Blob([html], { type: "text/html" });
 
-  if (blob.size > SINGLEFILE_MAX_BYTES) {
-    throw new Error(
-      `Captured page is ${(blob.size / 1024 / 1024).toFixed(1)} MB, ` +
-        "which exceeds the 10 MB upload limit."
+  if (blob.size > maxBytes) {
+    throw captureError(
+      "checking the snapshot size",
+      `The captured page is ${(blob.size / 1024 / 1024).toFixed(1)} MB, ` +
+        `which exceeds the configured limit of ${
+          maxBytes / 1024 / 1024
+        } MB. ` +
+        "Raise " +
+        "the limit in the extension options (SingleFile settings) and in " +
+        "your Linkwarden server's upload limits, or capture a lighter page."
     );
   }
 

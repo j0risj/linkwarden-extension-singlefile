@@ -89,7 +89,10 @@ const BookmarkForm = () => {
     void setStorageItem(SINGLEFILE_CHECKBOX_KEY, s ? "true" : "false");
     if (s && !capturePromise) {
       setCapturePromise(
-        captureSingleFile().catch((error) => {
+        captureSingleFile(
+          undefined,
+          singlefileConfig?.maxUploadMB
+        ).catch((error) => {
           setCapturePromise(null);
           setSaveSingleFile(false);
           void setStorageItem(SINGLEFILE_CHECKBOX_KEY, "false");
@@ -138,8 +141,13 @@ const BookmarkForm = () => {
           ? {
               enabled: true,
               archivalTagName: singlefileConfig.archivalTagName,
+              maxUploadBytes: singlefileConfig.maxUploadMB * 1024 * 1024,
               capturePromise,
-              startCapture: () => captureSingleFile(tabInfo?.id),
+              startCapture: () =>
+                captureSingleFile(
+                  tabInfo?.id,
+                  singlefileConfig.maxUploadMB * 1024 * 1024
+                ),
               onFallbackNeeded: () => {
                 toast({
                   title: "Formats generated server-side",

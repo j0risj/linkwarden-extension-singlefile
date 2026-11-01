@@ -9,6 +9,12 @@ export const singlefileConfigSchema = z.object({
     .min(1)
     .max(50)
     .default(DEFAULT_ARCHIVAL_TAG_NAME),
+  maxUploadMB: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(1024)
+    .default(10),
 });
 
 export type singlefileConfigInput = z.input<typeof singlefileConfigSchema>;

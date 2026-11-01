@@ -73,6 +73,34 @@ const SinglefileSettings = () => {
               </FormItem>
             )}
           />
+          <FormField
+            control={control}
+            name="maxUploadMB"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Max upload size (MB)</FormLabel>
+                <FormDescription>
+                  Captured snapshots larger than this are rejected before
+                  upload. Raise this only if your Linkwarden server (and any
+                  reverse proxy in front of it) accepts request bodies of this
+                  size.
+                </FormDescription>
+                <FormControl>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={1024}
+                    value={field.value as number}
+                    onChange={(e) => field.onChange(e.target.value)}
+                    name={field.name}
+                    onBlur={field.onBlur}
+                    ref={field.ref}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
           <div className="flex justify-end">
             <Button type="submit">Save</Button>
           </div>

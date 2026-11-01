@@ -7,6 +7,7 @@ import { getTags } from "./tags.ts";
 export interface SaveSingleFileOptions {
   enabled: boolean;
   archivalTagName: string;
+  maxUploadBytes: number;
   capturePromise: Promise<{ html: string; blob: Blob }> | null;
   startCapture: () => Promise<{ html: string; blob: Blob }>;
   onFallbackNeeded?: () => void;
@@ -106,19 +107,38 @@ export async function postLink(
 
   if (singlefile?.enabled) {
     setState("capturing");
-    singleFileResult = singlefile.capturePromise
-      ? await singlefile.capturePromise
-      : await singlefile.startCapture();
+    try {
+      singleFileResult = singlefile.capturePromise
+        ? await singlefile.capturePromise
+        : await singlefile.startCapture();
+    } catch (error) {
+      throw new Error(
+        `Saving aborted while capturing the page: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
     setState("uploading");
 
-    const archivalTagId = await findArchivalTagId(
-      baseUrl,
-      apiKey,
-      singlefile.archivalTagName
-    );
+    let archivalTagId: number | undefined;
+    try {
+      archivalTagId = await findArchivalTagId(
+        baseUrl,
+        apiKey,
+        singlefile.archivalTagName
+      );
+    } catch (error) {
+      throw new Error(
+        `Saving aborted while looking up the archival tag "${singlefile.archivalTagName}": ${
+          error instanceof Error ? error.message : String(error)
+        }. Check that your Linkwarden instance is reachable. `
+      );
+    }
     if (!archivalTagId) {
       throw new Error(
-        `Archival tag "${singlefile.archivalTagName}" not found. Create it in Linkwarden with archiveAsMonolith disabled, then try again.`
+        `Saving aborted: archival tag "${singlefile.archivalTagName}" was ` +
+          "not found. Create it in Linkwarden with archiveAsMonolith disabled, " +
+          "then try again."
       );
     }
 
@@ -132,25 +152,55 @@ export async function postLink(
       tags.push({ id: archivalTagId, name: singlefile.archivalTagName });
     }
 
-    const link = await axios.post(
-      url,
-      { ...data, tags },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-      }
-    );
+    let link;
+    try {
+      link = await axios.post(
+        url,
+        { ...data, tags },
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+          },
+        }
+      );
+    } catch (error) {
+      throw new Error(
+        `Saving aborted while creating the link: ${
+          error instanceof AxiosError
+            ? `${error.response?.statusText ?? ""} ${JSON.stringify(
+                error.response?.data?.response ?? ""
+              )}`.trim()
+            : error instanceof Error
+              ? error.message
+              : String(error)
+        }`
+      );
+    }
 
     const { id } = link.data.response;
-    await uploadArchive(
-      baseUrl,
-      apiKey,
-      id,
-      4,
-      singleFileResult?.blob as Blob,
-      "page.html"
-    );
+    try {
+      await uploadArchive(
+        baseUrl,
+        apiKey,
+        id,
+        4,
+        singleFileResult?.blob as Blob,
+        "page.html"
+      );
+    } catch (error) {
+      throw new Error(
+        `The link was created but uploading the SingleFile snapshot failed: ${
+          error instanceof AxiosError
+            ? `${error.response?.status ?? ""} ${
+                error.response?.statusText ?? ""
+              } ${JSON.stringify(error.response?.data ?? "")}`.trim()
+            : error instanceof Error
+              ? error.message
+              : String(error)
+        }. If the status is 413, the snapshot exceeds the upload size your ` +
+          "Linkwarden server or its reverse proxy accepts."
+      );
+    }
 
     if (uploadImage) {
       const screenshot = await captureScreenshot();

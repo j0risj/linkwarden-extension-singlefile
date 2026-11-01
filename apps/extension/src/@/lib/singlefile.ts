@@ -50,11 +50,14 @@ async function captureInTab(tabId: number): Promise<string> {
   const html = await executeScript(
     tabId,
     async (messageName: string) => {
+      const log = (...args: unknown[]) =>
+        console.log("[singlefile-capture]", ...args);
       const singleFile = (globalThis as { singleFileCore?: SingleFileCoreGlobal })
         .singleFileCore;
       if (!singleFile) {
         throw new Error("single-file-core did not load in the page.");
       }
+      log("singleFileCore available, starting capture");
       let loaded = 0;
       let max: number | undefined;
       const send = () => {
@@ -70,6 +73,7 @@ async function captureInTab(tabId: number): Promise<string> {
           // Progress is best-effort; never fail the capture on it.
         }
       };
+      log("calling getPageData");
       const pageData = await singleFile.getPageData({
         compressHTML: true,
         includeInfobar: false,
@@ -79,13 +83,18 @@ async function captureInTab(tabId: number): Promise<string> {
             typeof event.detail.max === "number"
           ) {
             max = event.detail.max;
+            log("resources initialized", max);
             send();
           } else if (event.type === event.RESOURCE_LOADED) {
             loaded++;
+            if (loaded % 10 === 0 || loaded === max) {
+              log("resources loaded", loaded, "/", max);
+            }
             send();
           }
         },
       });
+      log("getPageData resolved, content length", pageData.content?.length);
       return pageData.content;
     },
     [SINGLEFILE_PROGRESS_MESSAGE]
@@ -114,7 +123,20 @@ export async function captureSingleFile(
     throw new Error("This page cannot be saved as a SingleFile snapshot.");
   }
 
-  const html = await captureInTab(targetTabId);
+  const html = await Promise.race([
+    captureInTab(targetTabId),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              "Capture timed out after 60 seconds. The page never finished loading resources."
+            )
+          ),
+        60_000
+      )
+    ),
+  ]);
   const blob = new Blob([html], { type: "text/html" });
 
   if (blob.size > SINGLEFILE_MAX_BYTES) {

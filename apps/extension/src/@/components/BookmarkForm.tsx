@@ -536,12 +536,15 @@ const BookmarkForm = () => {
               Please do not close this window, this may take a few seconds
               depending on the size of the page.
             </p>
-            {state === "capturing" && captureProgress && (
+            {state === "capturing" && (
               <p className="text-sm mt-1">
-                Loading resources: {captureProgress.loaded}
-                {captureProgress.max != null
-                  ? ` / ${captureProgress.max}`
-                  : ""}
+                {captureProgress
+                  ? `Loading resources: ${captureProgress.loaded}${
+                      captureProgress.max != null
+                        ? ` / ${captureProgress.max}`
+                        : ""
+                    }`
+                  : "Preparing capture…"}
               </p>
             )}
           </div>

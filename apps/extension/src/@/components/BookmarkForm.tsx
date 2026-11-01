@@ -477,8 +477,16 @@ const BookmarkForm = () => {
             </>
           )}
 
-          {isDuplicate && (
-            <div className="w-fit ml-auto">
+          <div className="flex justify-between items-center">
+            <Button
+              variant="ghost"
+              type="button"
+              onClick={handleOptionsToggle}
+            >
+              {openOptions ? "Hide" : "More"} Options
+            </Button>
+
+            {isDuplicate ? (
               <a
                 className="text-muted text-xs font-bold text-zinc-600 dark:text-zinc-400 hover:underline cursor-pointer"
                 onClick={(e) => {
@@ -495,17 +503,9 @@ const BookmarkForm = () => {
                 Note: You've already saved this link{" "}
                 <ExternalLink size={16} className="inline-block mb-1" />
               </a>
-            </div>
-          )}
-
-          <div className="flex justify-between items-center">
-            <Button
-              variant="ghost"
-              type="button"
-              onClick={handleOptionsToggle}
-            >
-              {openOptions ? "Hide" : "More"} Options
-            </Button>
+            ) : (
+              <span />
+            )}
 
             <Button disabled={isPending} type="submit">
               Save

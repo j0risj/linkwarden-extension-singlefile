@@ -475,20 +475,6 @@ const BookmarkForm = () => {
             </>
           )}
 
-          <div className="flex justify-between items-center">
-            <Button
-              variant="ghost"
-              type="button"
-              onClick={handleOptionsToggle}
-            >
-              {openOptions ? "Hide" : "More"} Options
-            </Button>
-
-            <Button disabled={isPending} type="submit">
-              Save
-            </Button>
-          </div>
-
           {isDuplicate && (
             <div className="w-fit ml-auto">
               <a
@@ -509,6 +495,20 @@ const BookmarkForm = () => {
               </a>
             </div>
           )}
+
+          <div className="flex justify-between items-center">
+            <Button
+              variant="ghost"
+              type="button"
+              onClick={handleOptionsToggle}
+            >
+              {openOptions ? "Hide" : "More"} Options
+            </Button>
+
+            <Button disabled={isPending} type="submit">
+              Save
+            </Button>
+          </div>
         </form>
       </Form>
       <Toaster />

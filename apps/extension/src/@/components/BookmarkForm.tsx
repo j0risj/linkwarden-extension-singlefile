@@ -92,6 +92,8 @@ const BookmarkForm = () => {
         captureSingleFile(
           undefined,
           singlefileConfig?.maxUploadMB
+            ? singlefileConfig.maxUploadMB * 1024 * 1024
+            : undefined
         ).catch((error) => {
           setCapturePromise(null);
           setSaveSingleFile(false);

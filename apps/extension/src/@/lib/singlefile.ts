@@ -24,13 +24,35 @@ async function executeScript(tabId: number, func: any, args: any[] = []) {
   return results?.[0];
 }
 
+// Injecting the bundle as a file (rather than importing it via a
+// moz-extension:/chrome-extension: URL) runs it in the content-script world,
+// which the page's Content Security Policy cannot block.
+async function injectSingleFileCore(tabId: number) {
+  if (
+    typeof chrome !== "undefined" &&
+    typeof chrome.scripting !== "undefined"
+  ) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["singlefile-core.js"],
+    });
+    return;
+  }
+
+  await getBrowser().tabs.executeScript(tabId, {
+    file: "singlefile-core.js",
+  });
+}
+
 async function captureInTab(tabId: number): Promise<string> {
+  await injectSingleFileCore(tabId);
+
   const html = await executeScript(tabId, async () => {
-    const singlefile = await import(
-      // @ts-ignore dynamic runtime URL
-      chrome.runtime.getURL("singlefile-core.js")
-    );
-    const pageData = await singlefile.getPageData({
+    const singleFile = (globalThis as any).singleFileCore;
+    if (!singleFile) {
+      throw new Error("single-file-core did not load in the page.");
+    }
+    const pageData = await singleFile.getPageData({
       compressHTML: true,
       includeInfobar: false,
     });

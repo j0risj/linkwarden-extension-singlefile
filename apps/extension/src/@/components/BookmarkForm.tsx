@@ -18,6 +18,7 @@ import TagInput from "./TagInput.tsx";
 import CollectionInput from "./CollectionInput.tsx";
 import { Textarea } from "./ui/Textarea.tsx";
 import {
+  getBrowser,
   getCurrentTabInfo,
   getStorageItem,
   setStorageItem,
@@ -35,7 +36,7 @@ import { getShouldUseTagSearch, getTags } from "../lib/actions/tags.ts";
 import { ExternalLink } from "lucide-react";
 import { Checkbox } from "./ui/CheckBox.tsx";
 import { Label } from "./ui/Label.tsx";
-import { captureSingleFile, isCapturableUrl } from "../lib/singlefile.ts";
+import { captureSingleFile, isCapturableUrl, SINGLEFILE_PROGRESS_MESSAGE, SingleFileProgress } from "../lib/singlefile.ts";
 import { getSinglefileConfig } from "../lib/singlefileConfig.ts";
 
 // The popup is torn down every time it loses focus, so remember whether the
@@ -57,6 +58,8 @@ const BookmarkForm = () => {
     ReturnType<typeof getSinglefileConfig>
   > | null>(null);
   const [state, setState] = useState<"capturing" | "uploading" | null>(null);
+  const [captureProgress, setCaptureProgress] =
+    useState<SingleFileProgress | null>(null);
   const [tagSearch, setTagSearch] = useState<string>("");
 
   const [isConfigured, setIsConfigured] = useState(false);
@@ -218,6 +221,18 @@ const BookmarkForm = () => {
     };
 
     setTabInformation();
+  }, []);
+
+  useEffect(() => {
+    const onMessage = (message: unknown) => {
+      const progress = message as SingleFileProgress & { type?: string };
+      if (progress?.type === SINGLEFILE_PROGRESS_MESSAGE) {
+        setCaptureProgress({ loaded: progress.loaded, max: progress.max });
+      }
+    };
+    getBrowser().runtime.onMessage.addListener(onMessage);
+    return () =>
+      getBrowser().runtime.onMessage.removeListener(onMessage);
   }, []);
 
   const { handleSubmit, control } = form;
@@ -521,6 +536,14 @@ const BookmarkForm = () => {
               Please do not close this window, this may take a few seconds
               depending on the size of the page.
             </p>
+            {state === "capturing" && captureProgress && (
+              <p className="text-sm mt-1">
+                Loading resources: {captureProgress.loaded}
+                {captureProgress.max != null
+                  ? ` / ${captureProgress.max}`
+                  : ""}
+              </p>
+            )}
           </div>
         </div>
       )}

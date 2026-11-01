@@ -44,20 +44,66 @@ async function injectSingleFileCore(tabId: number) {
   });
 }
 
+export interface SingleFileProgress {
+  loaded: number;
+  max?: number;
+}
+
+interface SingleFileCoreGlobal {
+  getPageData: (options: Record<string, unknown>) => Promise<{
+    content: string;
+  }>;
+}
+
+interface SingleFileProgressEvent {
+  type: string;
+  detail: { max?: number };
+  RESOURCES_INITIALIZED: string;
+  RESOURCE_LOADED: string;
+}
+
+export const SINGLEFILE_PROGRESS_MESSAGE = "singlefile-progress";
+
 async function captureInTab(tabId: number): Promise<string> {
   await injectSingleFileCore(tabId);
 
-  const html = await executeScript(tabId, async () => {
-    const singleFile = (globalThis as any).singleFileCore;
-    if (!singleFile) {
-      throw new Error("single-file-core did not load in the page.");
-    }
-    const pageData = await singleFile.getPageData({
-      compressHTML: true,
-      includeInfobar: false,
-    });
-    return pageData.content;
-  });
+  const html = await executeScript(
+    tabId,
+    async (messageName: string) => {
+      const singleFile = (globalThis as { singleFileCore?: SingleFileCoreGlobal })
+        .singleFileCore;
+      if (!singleFile) {
+        throw new Error("single-file-core did not load in the page.");
+      }
+      let loaded = 0;
+      let max: number | undefined;
+      const send = (browser: { runtime?: { sendMessage: (msg: unknown) => Promise<unknown> } } | undefined) => {
+        browser?.runtime?.sendMessage({
+          type: messageName,
+          loaded,
+          max,
+        }).catch(() => {});
+      };
+      const pageData = await singleFile.getPageData({
+        compressHTML: true,
+        includeInfobar: false,
+        onprogress: async (event: SingleFileProgressEvent) => {
+          if (
+            event.type === event.RESOURCES_INITIALIZED &&
+            typeof event.detail.max === "number"
+          ) {
+            max = event.detail.max;
+            send(globalThis.browser ?? globalThis.chrome);
+          } else if (event.type === event.RESOURCE_LOADED) {
+            loaded++;
+            send(globalThis.browser ?? globalThis.chrome);
+          }
+        },
+      });
+      return pageData.content;
+    },
+    [SINGLEFILE_PROGRESS_MESSAGE]
+  );
 
   if (typeof html !== "string" || !html) {
     throw new Error("SingleFile capture returned an empty page.");

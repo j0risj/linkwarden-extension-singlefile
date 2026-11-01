@@ -16,10 +16,13 @@ async function executeScript(tabId: number, func: any, args: any[] = []) {
 
 // Injecting the bundle as a file (rather than importing it via a
 // moz-extension:/chrome-extension: URL) runs it in the content-script world,
-// which the page's Content Security Policy cannot block.
+// which the page's Content Security Policy cannot block. It must reach every
+// frame: the frame-tree processor in single-file-core waits for a postMessage
+// handshake from each subframe, and a subframe without the bundle never
+// answers, hanging the capture forever.
 async function injectSingleFileCore(tabId: number) {
   await browser.scripting.executeScript({
-    target: { tabId },
+    target: { tabId, allFrames: true },
     files: ["singlefile-core.js"],
   });
 }

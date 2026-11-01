@@ -1,4 +1,4 @@
-import { getBrowser } from "./utils.ts";
+import browser from "webextension-polyfill";
 
 export const SINGLEFILE_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -6,41 +6,21 @@ export const isCapturableUrl = (url: string | undefined): boolean =>
   !!url && /^https?:\/\//.test(url);
 
 async function executeScript(tabId: number, func: any, args: any[] = []) {
-  if (
-    typeof chrome !== "undefined" &&
-    typeof chrome.scripting !== "undefined"
-  ) {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func,
-      args,
-    });
-    return results[0]?.result;
-  }
-
-  const results = await getBrowser().tabs.executeScript(tabId, {
-    code: `(${func})(${args.map((arg) => JSON.stringify(arg)).join(",")})`,
+  const results = await browser.scripting.executeScript({
+    target: { tabId },
+    func,
+    args,
   });
-  return results?.[0];
+  return results[0]?.result;
 }
 
 // Injecting the bundle as a file (rather than importing it via a
 // moz-extension:/chrome-extension: URL) runs it in the content-script world,
 // which the page's Content Security Policy cannot block.
 async function injectSingleFileCore(tabId: number) {
-  if (
-    typeof chrome !== "undefined" &&
-    typeof chrome.scripting !== "undefined"
-  ) {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ["singlefile-core.js"],
-    });
-    return;
-  }
-
-  await getBrowser().tabs.executeScript(tabId, {
-    file: "singlefile-core.js",
+  await browser.scripting.executeScript({
+    target: { tabId },
+    files: ["singlefile-core.js"],
   });
 }
 
@@ -77,12 +57,18 @@ async function captureInTab(tabId: number): Promise<string> {
       }
       let loaded = 0;
       let max: number | undefined;
-      const send = (browser: { runtime?: { sendMessage: (msg: unknown) => Promise<unknown> } } | undefined) => {
-        browser?.runtime?.sendMessage({
-          type: messageName,
-          loaded,
-          max,
-        }).catch(() => {});
+      const send = () => {
+        const b = globalThis.browser ?? globalThis.chrome;
+        try {
+          const maybePromise = b.runtime.sendMessage({
+            type: messageName,
+            loaded,
+            max,
+          });
+          if (maybePromise?.catch) maybePromise.catch(() => {});
+        } catch {
+          // Progress is best-effort; never fail the capture on it.
+        }
       };
       const pageData = await singleFile.getPageData({
         compressHTML: true,
@@ -93,10 +79,10 @@ async function captureInTab(tabId: number): Promise<string> {
             typeof event.detail.max === "number"
           ) {
             max = event.detail.max;
-            send(globalThis.browser ?? globalThis.chrome);
+            send();
           } else if (event.type === event.RESOURCE_LOADED) {
             loaded++;
-            send(globalThis.browser ?? globalThis.chrome);
+            send();
           }
         },
       });
@@ -114,7 +100,7 @@ async function captureInTab(tabId: number): Promise<string> {
 export async function captureSingleFile(
   tabId?: number
 ): Promise<{ html: string; blob: Blob }> {
-  const tabs = await getBrowser().tabs.query({
+  const tabs = await browser.tabs.query({
     active: true,
     currentWindow: true,
   });

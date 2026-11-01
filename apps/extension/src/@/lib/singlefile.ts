@@ -50,6 +50,12 @@ export const SINGLEFILE_PROGRESS_MESSAGE = "singlefile-progress";
 async function captureInTab(tabId: number): Promise<string> {
   await injectSingleFileCore(tabId);
 
+  // Tell the background which tab is capturing so it can relay the frame-tree
+  // handshake messages (see the runtime.onMessage relay in the background).
+  browser.runtime.sendMessage({ method: "singlefile-capture-started" }).catch(
+    () => {}
+  );
+
   const html = await executeScript(
     tabId,
     async (messageName: string) => {
@@ -77,14 +83,9 @@ async function captureInTab(tabId: number): Promise<string> {
         }
       };
       log("calling getPageData");
-      // removeFrames: the frame-tree processor handshakes with subframes via
-      // postMessage, which does not work from a scripting.executeScript
-      // context (sandboxed world), so frames would hang the capture forever.
-      // With this flag iframes are removed from the snapshot instead.
       const pageData = await singleFile.getPageData({
         compressHTML: true,
         includeInfobar: false,
-        removeFrames: true,
         onprogress: async (event: SingleFileProgressEvent) => {
           if (
             event.type === event.RESOURCES_INITIALIZED &&

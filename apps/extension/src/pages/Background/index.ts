@@ -34,6 +34,40 @@ type OnInputEnteredDisposition = `${chrome.omnibox.OnInputEnteredDisposition}`;
 
 const browser = getBrowser();
 
+// single-file-core frames exchange handshake messages via runtime messaging
+// when running in a browser extension context (see its content-frame-tree.js:
+// RUNTIME_MESSAGING). Frames send "singlefile.frameTree.*" messages and expect
+// them to be relayed back into the tab; the lazy loader likewise schedules
+// timers through "singlefile.lazyTimeout.*". The real SingleFile extension
+// implements this relay in its background page; without it, frame processing
+// hangs forever. The capture tab id is remembered when a capture starts
+// ("singlefile-capture-started") so responses can be sent back to the right tab.
+let singleFileCaptureTabId: number | undefined;
+
+browser.runtime.onMessage.addListener((message: any, sender: any) => {
+  if (
+    message?.method === "singlefile-capture-started" &&
+    typeof sender.tab?.id === "number"
+  ) {
+    singleFileCaptureTabId = sender.tab.id;
+    return;
+  }
+  if (
+    typeof message?.method === "string" &&
+    (message.method.startsWith("singlefile.frameTree") ||
+      message.method.startsWith("singlefile.lazyTimeout"))
+  ) {
+    const tabId = singleFileCaptureTabId;
+    if (typeof tabId === "number") {
+      // Return the promise so responses (e.g. frame options requests)
+      // propagate back to the sending frame.
+      return browser.tabs
+        .sendMessage(tabId, message)
+        .catch(() => undefined);
+    }
+  }
+});
+
 // This is the main functions that will be called when a bookmark is created, update or deleted
 // Won't work with axios xhr or something not supported by the browser
 

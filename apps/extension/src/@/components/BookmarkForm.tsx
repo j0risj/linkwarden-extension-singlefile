@@ -131,7 +131,8 @@ const BookmarkForm = () => {
 
   const { mutate: onSubmit, isPending } = useMutation({
     mutationFn: async (values: bookmarkFormValues) => {
-      await postLink(
+      try {
+        await postLink(
         config?.baseUrl as string,
         uploadImage,
         values,
@@ -158,28 +159,29 @@ const BookmarkForm = () => {
               },
             }
           : undefined
-      );
+        );
+      } finally {
+        // Never leave the loading overlay up after the mutation ends, whether
+        // it succeeded or failed.
+        setState(null);
+        setCaptureProgress(null);
+      }
 
       return;
     },
     onError: (error) => {
       console.error(error);
-      if (error instanceof AxiosError) {
-        toast({
-          title: "Error",
-          description:
-            error.response?.data.response ||
-            "There was an error while trying to save the link. Please try again.",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Error",
-          description:
-            "There was an error while trying to save the link. Please try again.",
-          variant: "destructive",
-        });
-      }
+      toast({
+        title: "Error",
+        description:
+          error instanceof AxiosError
+            ? error.response?.data.response ||
+              error.message ||
+              "There was an error while trying to save the link. Please try again."
+            : error.message ||
+              "There was an error while trying to save the link. Please try again.",
+        variant: "destructive",
+      });
       return;
     },
     onSuccess: () => {

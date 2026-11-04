@@ -119,7 +119,7 @@ const BookmarkForm = () => {
           baseUrl: config?.baseUrl as string,
           apiKey: config?.apiKey as string,
           uploadImage,
-          archivalTagName: singlefileConfig.archivalTagName,
+          maxUploadBytes: singlefileConfig.maxUploadMB * 1024 * 1024,
           data: values,
           tabId: tabInfo?.id,
         };

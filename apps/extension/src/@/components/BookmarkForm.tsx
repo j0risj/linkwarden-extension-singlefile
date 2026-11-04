@@ -42,6 +42,10 @@ import {
   SAVE_SINGLEFILE_MESSAGE,
   SaveSingleFileMessage,
 } from "../lib/messages.ts";
+import {
+  getSingleFileProgress,
+  SINGLEFILE_PROGRESS_KEY,
+} from "../lib/singlefileProgress.ts";
 
 // The popup is torn down every time it loses focus, so remember whether the
 // user had the extra options expanded and bring them back that way.
@@ -58,6 +62,7 @@ const BookmarkForm = () => {
     ReturnType<typeof getSinglefileConfig>
   > | null>(null);
   const [state, setState] = useState<"capturing" | "uploading" | null>(null);
+  const [progress, setProgress] = useState<{ loaded?: number; max?: number } | null>(null);
   const [tagSearch, setTagSearch] = useState<string>("");
 
   const [isConfigured, setIsConfigured] = useState(false);
@@ -187,6 +192,30 @@ const BookmarkForm = () => {
   });
 
   useEffect(() => {
+    // A SingleFile save runs in the background worker and outlives this
+    // popup. If one is still in progress when the popup (re)opens, show its
+    // progress overlay again, and follow live updates via storage changes.
+    const syncProgress = async () => {
+      const p = await getSingleFileProgress();
+      if (p) {
+        setState(p.phase);
+        setProgress({ loaded: p.loaded, max: p.max });
+      } else {
+        setState(null);
+        setProgress(null);
+      }
+    };
+    void syncProgress();
+
+    const onStorageChanged = (
+      changes: Record<string, unknown>,
+      areaName: string
+    ) => {
+      if (areaName !== "local" || !(SINGLEFILE_PROGRESS_KEY in changes)) return;
+      void syncProgress();
+    };
+    getBrowser().storage.onChanged.addListener(onStorageChanged);
+
     const setTabInformation = async () => {
       setOpenOptions((await getStorageItem(MORE_OPTIONS_KEY)) === "true");
 
@@ -218,6 +247,10 @@ const BookmarkForm = () => {
     };
 
     setTabInformation();
+
+    return () => {
+      getBrowser().storage.onChanged.removeListener(onStorageChanged);
+    };
   }, []);
 
   const { handleSubmit, control } = form;
@@ -514,7 +547,11 @@ const BookmarkForm = () => {
 
             <p className="text-xl mt-1">
               {state === "capturing"
-                ? "Capturing the page..."
+                ? `Capturing the page...${
+                    progress?.max
+                      ? ` (${progress.loaded ?? 0}/${progress.max} resources)`
+                      : ""
+                  }`
                 : "Uploading image..."}
             </p>
             <p className="text-xs text-center max-w-xs">

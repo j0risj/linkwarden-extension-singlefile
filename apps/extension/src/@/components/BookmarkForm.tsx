@@ -545,15 +545,14 @@ const BookmarkForm = () => {
               ></path>
             </svg>
 
-            <p className="text-xl mt-1">
-              {state === "capturing"
-                ? `Capturing the page...${
-                    progress?.max
-                      ? ` (${progress.loaded ?? 0}/${progress.max} resources)`
-                      : ""
-                  }`
-                : "Uploading image..."}
+            <p className="text-xl mt-1 text-center">
+              {state === "capturing" ? "Capturing the page..." : "Uploading image..."}
             </p>
+            {state === "capturing" && progress?.max ? (
+              <p className="text-sm text-zinc-300 text-center">
+                {progress.loaded ?? 0}/{progress.max} resources
+              </p>
+            ) : null}
             <p className="text-xs text-center max-w-xs">
               Please do not close this window, this may take a few seconds
               depending on the size of the page.

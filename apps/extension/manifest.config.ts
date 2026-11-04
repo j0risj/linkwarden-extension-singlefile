@@ -95,8 +95,15 @@ export function buildManifest(target: ManifestTarget) {
       "tabs",
       ...(options.bookmarks ? ["bookmarks"] : []),
       "contextMenus",
+      "notifications",
     ],
     host_permissions: ["<all_urls>"],
+    web_accessible_resources: [
+      {
+        resources: ["singlefile-core.js"],
+        matches: ["<all_urls>"],
+      },
+    ],
     background: {
       ...(options.serviceWorker ? { service_worker: "background.js" } : {}),
       scripts: ["background.js"],

@@ -354,6 +354,23 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
   const msg = message as SaveSingleFileMessage;
   if (!msg || msg.type !== SAVE_SINGLEFILE_MESSAGE) return;
 
+  // Resolve the tab title once so the notifications can say which tab
+  // finished; the tab may already be gone, so never fail on this.
+  let tabTitle: string | undefined;
+  if (msg.tabId !== undefined) {
+    try {
+      tabTitle = (await browser.tabs.get(msg.tabId)).title;
+    } catch {
+      tabTitle = undefined;
+    }
+  }
+  const savedMessage = tabTitle
+    ? `Saved "${tabTitle}" as a SingleFile snapshot.`
+    : "SingleFile snapshot saved.";
+  const failedMessage = (reason: string) =>
+    (tabTitle ? `Failed to save "${tabTitle}"` : "Failed to save the page") +
+    `: ${reason}`;
+
   const setState = async (phase: "capturing" | "uploading" | null) => {
     if (phase === null) {
       await setSingleFileProgress(null);
@@ -395,15 +412,13 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
     );
     await setSingleFileProgress(null);
     if (msg.tabId !== undefined) await updateBadge(msg.tabId, true);
-    notify("Linkwarden", "SingleFile snapshot saved.");
+    notify("Linkwarden", savedMessage);
   } catch (error) {
     await setSingleFileProgress(null);
     console.error(error);
     notify(
       "Linkwarden",
-      `Failed to save SingleFile snapshot: ${
-        error instanceof Error ? error.message : "unknown error"
-      }`
+      failedMessage(error instanceof Error ? error.message : "unknown error")
     );
   }
 });

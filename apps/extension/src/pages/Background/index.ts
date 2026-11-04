@@ -335,9 +335,9 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
       msg.apiKey,
       {
         enabled: true,
-        archivalTagName: msg.archivalTagName,
+        maxUploadBytes: msg.maxUploadBytes,
         capturePromise: null,
-        startCapture: () => captureSingleFile(msg.tabId),
+        startCapture: () => captureSingleFile(msg.tabId, msg.maxUploadBytes),
         onFallbackNeeded: () =>
           notify(
             "Linkwarden",

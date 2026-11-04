@@ -36,8 +36,12 @@ import { getShouldUseTagSearch, getTags } from "../lib/actions/tags.ts";
 import { ExternalLink } from "lucide-react";
 import { Checkbox } from "./ui/CheckBox.tsx";
 import { Label } from "./ui/Label.tsx";
-import { captureSingleFile, isCapturableUrl, SINGLEFILE_PROGRESS_MESSAGE, SingleFileProgress } from "../lib/singlefile.ts";
+import { isCapturableUrl } from "../lib/singlefile.ts";
 import { getSinglefileConfig } from "../lib/singlefileConfig.ts";
+import {
+  SAVE_SINGLEFILE_MESSAGE,
+  SaveSingleFileMessage,
+} from "../lib/messages.ts";
 
 // The popup is torn down every time it loses focus, so remember whether the
 // user had the extra options expanded and bring them back that way.
@@ -50,16 +54,10 @@ const BookmarkForm = () => {
   const [uploadImage, setUploadImage] = useState<boolean>(false);
   const [saveSingleFile, setSaveSingleFile] = useState<boolean>(false);
   const [singleFileSupported, setSingleFileSupported] = useState<boolean>(true);
-  const [capturePromise, setCapturePromise] = useState<Promise<{
-    html: string;
-    blob: Blob;
-  }> | null>(null);
   const [singlefileConfig, setSinglefileConfig] = useState<Awaited<
     ReturnType<typeof getSinglefileConfig>
   > | null>(null);
   const [state, setState] = useState<"capturing" | "uploading" | null>(null);
-  const [captureProgress, setCaptureProgress] =
-    useState<SingleFileProgress | null>(null);
   const [tagSearch, setTagSearch] = useState<string>("");
 
   const [isConfigured, setIsConfigured] = useState(false);
@@ -87,28 +85,6 @@ const BookmarkForm = () => {
     if (s === "indeterminate") return;
     setSaveSingleFile(s);
     void setStorageItem(SINGLEFILE_CHECKBOX_KEY, s ? "true" : "false");
-    if (s && !capturePromise) {
-      setCapturePromise(
-        captureSingleFile(
-          undefined,
-          singlefileConfig?.maxUploadMB
-            ? singlefileConfig.maxUploadMB * 1024 * 1024
-            : undefined
-        ).catch((error) => {
-          setCapturePromise(null);
-          setSaveSingleFile(false);
-          void setStorageItem(SINGLEFILE_CHECKBOX_KEY, "false");
-          toast({
-            title: "Capture failed",
-            description: `${
-              error instanceof Error ? error.message : "Could not capture the page."
-            } (${tabInfo?.url ?? ""})`,
-            variant: "destructive",
-          });
-          throw error;
-        })
-      );
-    }
   };
 
   const handleOptionsToggle = () => {
@@ -133,59 +109,69 @@ const BookmarkForm = () => {
 
   const { mutate: onSubmit, isPending } = useMutation({
     mutationFn: async (values: bookmarkFormValues) => {
-      try {
-        await postLink(
+      if (saveSingleFile && singlefileConfig) {
+        // Hand the whole job to the background worker: the popup is
+        // destroyed when it loses focus, which would abort the capture
+        // and upload. The worker keeps running, so the user can switch
+        // to another tab while the SingleFile save is in progress.
+        const message: SaveSingleFileMessage = {
+          type: SAVE_SINGLEFILE_MESSAGE,
+          baseUrl: config?.baseUrl as string,
+          apiKey: config?.apiKey as string,
+          uploadImage,
+          archivalTagName: singlefileConfig.archivalTagName,
+          data: values,
+          tabId: tabInfo?.id,
+        };
+        await getBrowser().runtime.sendMessage(message);
+        return;
+      }
+
+      await postLink(
         config?.baseUrl as string,
         uploadImage,
         values,
         setState,
-        config?.apiKey as string,
-        saveSingleFile && singlefileConfig
-          ? {
-              enabled: true,
-              maxUploadBytes: singlefileConfig.maxUploadMB * 1024 * 1024,
-              capturePromise,
-              startCapture: () =>
-                captureSingleFile(
-                  tabInfo?.id,
-                  singlefileConfig.maxUploadMB * 1024 * 1024
-                ),
-              onFallbackNeeded: () => {
-                toast({
-                  title: "Formats generated server-side",
-                  description:
-                    "The worker may have read the link before the upload finished; re-archive if needed.",
-                  variant: "destructive",
-                });
-              },
-            }
-          : undefined
-        );
-      } finally {
-        // Never leave the loading overlay up after the mutation ends, whether
-        // it succeeded or failed.
-        setState(null);
-        setCaptureProgress(null);
-      }
+        config?.apiKey as string
+      );
 
       return;
     },
     onError: (error) => {
       console.error(error);
-      toast({
-        title: "Error",
-        description:
-          error instanceof AxiosError
-            ? error.response?.data.response ||
-              error.message ||
-              "There was an error while trying to save the link. Please try again."
-            : error.message ||
-              "There was an error while trying to save the link. Please try again.",
-        variant: "destructive",
-      });
+      if (error instanceof AxiosError) {
+        toast({
+          title: "Error",
+          description:
+            error.response?.data.response ||
+            "There was an error while trying to save the link. Please try again.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description:
+            "There was an error while trying to save the link. Please try again.",
+          variant: "destructive",
+        });
+      }
       return;
     },
     onSuccess: () => {
+      if (saveSingleFile) {
+        // The background worker finishes the save; the badge and a
+        // notification are handled there.
+        toast({
+          title: "Saving in background",
+          description:
+            "You can switch tabs now — the SingleFile capture will finish in the background.",
+          variant: "success",
+        });
+        setTimeout(() => {
+          window.close();
+        }, 1200);
+        return;
+      }
       // Update badge to show link is saved
       updateBadge(tabInfo?.id, true);
       setTimeout(() => {
@@ -232,18 +218,6 @@ const BookmarkForm = () => {
     };
 
     setTabInformation();
-  }, []);
-
-  useEffect(() => {
-    const onMessage = (message: unknown) => {
-      const progress = message as SingleFileProgress & { type?: string };
-      if (progress?.type === SINGLEFILE_PROGRESS_MESSAGE) {
-        setCaptureProgress({ loaded: progress.loaded, max: progress.max });
-      }
-    };
-    getBrowser().runtime.onMessage.addListener(onMessage);
-    return () =>
-      getBrowser().runtime.onMessage.removeListener(onMessage);
   }, []);
 
   const { handleSubmit, control } = form;
@@ -486,7 +460,13 @@ const BookmarkForm = () => {
               {openOptions ? "Hide" : "More"} Options
             </Button>
 
-            {isDuplicate ? (
+            <Button disabled={isPending} type="submit">
+              Save
+            </Button>
+          </div>
+
+          {isDuplicate && (
+            <div className="w-fit ml-auto">
               <a
                 className="text-muted text-xs font-bold text-zinc-600 dark:text-zinc-400 hover:underline cursor-pointer"
                 onClick={(e) => {
@@ -503,14 +483,8 @@ const BookmarkForm = () => {
                 Note: You've already saved this link{" "}
                 <ExternalLink size={16} className="inline-block mb-1" />
               </a>
-            ) : (
-              <span />
-            )}
-
-            <Button disabled={isPending} type="submit">
-              Save
-            </Button>
-          </div>
+            </div>
+          )}
         </form>
       </Form>
       <Toaster />
@@ -547,17 +521,6 @@ const BookmarkForm = () => {
               Please do not close this window, this may take a few seconds
               depending on the size of the page.
             </p>
-            {state === "capturing" && (
-              <p className="text-sm mt-1">
-                {captureProgress
-                  ? `Loading resources: ${captureProgress.loaded}${
-                      captureProgress.max != null
-                        ? ` / ${captureProgress.max}`
-                        : ""
-                    }`
-                  : "Preparing capture…"}
-              </p>
-            )}
           </div>
         </div>
       )}

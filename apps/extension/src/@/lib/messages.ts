@@ -13,7 +13,7 @@ export interface SaveSingleFileMessage {
   baseUrl: string;
   apiKey: string;
   uploadImage: boolean;
-  archivalTagName: string;
+  maxUploadBytes: number;
   data: bookmarkFormValues;
   tabId?: number;
 }

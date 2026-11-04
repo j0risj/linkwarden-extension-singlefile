@@ -10,8 +10,14 @@ import { getConfig, isConfigured } from "../../@/lib/config.ts";
 import {
   // deleteLinkFetch,
   // updateLinkFetch,
+  postLink,
   postLinkFetch,
 } from "../../@/lib/actions/links.ts";
+import { captureSingleFile } from "../../@/lib/singlefile.ts";
+import {
+  SAVE_SINGLEFILE_MESSAGE,
+  SaveSingleFileMessage,
+} from "../../@/lib/messages.ts";
 import {
   bookmarkMetadata,
   // deleteBookmarkMetadata,
@@ -298,6 +304,58 @@ browser.runtime.onInstalled.addListener(async function () {
     title: "Save all tabs to Linkwarden",
     contexts: ["page"],
   });
+});
+
+// SingleFile saves run here, not in the popup: the popup is destroyed as soon
+// as it loses focus, which would abort an in-flight capture/upload. The
+// background worker keeps running, so the user can freely switch tabs.
+function notify(title: string, message: string) {
+  try {
+    chrome.notifications?.create({
+      type: "basic",
+      iconUrl: "128.png",
+      title,
+      message,
+    });
+  } catch (error) {
+    console.error("Failed to show notification:", error);
+  }
+}
+
+browser.runtime.onMessage.addListener(async (message: unknown) => {
+  const msg = message as SaveSingleFileMessage;
+  if (!msg || msg.type !== SAVE_SINGLEFILE_MESSAGE) return;
+
+  try {
+    await postLink(
+      msg.baseUrl,
+      msg.uploadImage,
+      msg.data,
+      () => {},
+      msg.apiKey,
+      {
+        enabled: true,
+        archivalTagName: msg.archivalTagName,
+        capturePromise: null,
+        startCapture: () => captureSingleFile(msg.tabId),
+        onFallbackNeeded: () =>
+          notify(
+            "Linkwarden",
+            "Some formats were generated server-side; re-archive the link if needed."
+          ),
+      }
+    );
+    if (msg.tabId !== undefined) await updateBadge(msg.tabId, true);
+    notify("Linkwarden", "SingleFile snapshot saved.");
+  } catch (error) {
+    console.error(error);
+    notify(
+      "Linkwarden",
+      `Failed to save SingleFile snapshot: ${
+        error instanceof Error ? error.message : "unknown error"
+      }`
+    );
+  }
 });
 
 browser.tabs.onUpdated.addListener(async (tabId, changeInfo) => {

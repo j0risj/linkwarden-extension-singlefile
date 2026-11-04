@@ -34,7 +34,7 @@ const targets: Record<ManifestTarget, TargetOptions> = {
     omnibox: true,
     browserSpecificSettings: {
       gecko: {
-        id: "jordanlinkwarden@gmail.com",
+        id: "linkwarden-with-single-file@jorisjanssen.de",
         strict_min_version: "121.0",
       },
     },

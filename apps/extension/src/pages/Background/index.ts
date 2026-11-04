@@ -13,11 +13,18 @@ import {
   postLink,
   postLinkFetch,
 } from "../../@/lib/actions/links.ts";
-import { captureSingleFile } from "../../@/lib/singlefile.ts";
+import {
+  captureSingleFile,
+  SINGLEFILE_PROGRESS_MESSAGE,
+} from "../../@/lib/singlefile.ts";
 import {
   SAVE_SINGLEFILE_MESSAGE,
   SaveSingleFileMessage,
 } from "../../@/lib/messages.ts";
+import {
+  getSingleFileProgress,
+  setSingleFileProgress,
+} from "../../@/lib/singlefileProgress.ts";
 import {
   bookmarkMetadata,
   // deleteBookmarkMetadata,
@@ -323,15 +330,56 @@ function notify(title: string, message: string) {
 }
 
 browser.runtime.onMessage.addListener(async (message: unknown) => {
+  // Progress events from the injected single-file-core capture script. They
+  // arrive while a save is running in this worker; keep them in storage so a
+  // reopened popup can show the progress again.
+  const progressMsg = message as {
+    type?: string;
+    loaded?: number;
+    max?: number;
+  };
+  if (progressMsg?.type === SINGLEFILE_PROGRESS_MESSAGE) {
+    const current = await getSingleFileProgress();
+    if (current) {
+      await setSingleFileProgress({
+        ...current,
+        loaded: progressMsg.loaded,
+        max: progressMsg.max,
+        updatedAt: Date.now(),
+      });
+    }
+    return;
+  }
+
   const msg = message as SaveSingleFileMessage;
   if (!msg || msg.type !== SAVE_SINGLEFILE_MESSAGE) return;
 
+  const setState = async (phase: "capturing" | "uploading" | null) => {
+    if (phase === null) {
+      await setSingleFileProgress(null);
+      return;
+    }
+    const current = await getSingleFileProgress();
+    await setSingleFileProgress({
+      active: true,
+      phase,
+      loaded: current?.loaded,
+      max: current?.max,
+      updatedAt: Date.now(),
+    });
+  };
+
   try {
+    await setSingleFileProgress({
+      active: true,
+      phase: "capturing",
+      updatedAt: Date.now(),
+    });
     await postLink(
       msg.baseUrl,
       msg.uploadImage,
       msg.data,
-      () => {},
+      setState,
       msg.apiKey,
       {
         enabled: true,
@@ -345,9 +393,11 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
           ),
       }
     );
+    await setSingleFileProgress(null);
     if (msg.tabId !== undefined) await updateBadge(msg.tabId, true);
     notify("Linkwarden", "SingleFile snapshot saved.");
   } catch (error) {
+    await setSingleFileProgress(null);
     console.error(error);
     notify(
       "Linkwarden",

@@ -48,8 +48,8 @@ export const SINGLEFILE_RESULT_KEY = "lw_singlefile_result";
 
 /**
  * Final outcome of a background SingleFile save. The background worker writes
- * it once per save (the desktop notification is the other channel); an open
- * popup turns it into a toast.
+ * it once per save; an open (or reopened) popup turns it into a toast and an
+ * inline banner.
  */
 export async function getSingleFileResult(): Promise<SingleFileResult | null> {
   const raw = await getStorageItem(SINGLEFILE_RESULT_KEY);

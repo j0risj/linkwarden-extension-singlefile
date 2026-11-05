@@ -65,6 +65,7 @@ const BookmarkForm = () => {
   > | null>(null);
   const [state, setState] = useState<"capturing" | "uploading" | null>(null);
   const [progress, setProgress] = useState<{ loaded?: number; max?: number } | null>(null);
+  const [result, setResult] = useState<{ status: string; message: string } | null>(null);
   const [tagSearch, setTagSearch] = useState<string>("");
 
   const [isConfigured, setIsConfigured] = useState(false);
@@ -208,8 +209,9 @@ const BookmarkForm = () => {
     };
     void syncProgress();
 
-    // Show the outcome of a background SingleFile save as a toast. The popup
-    // is never closed automatically for SingleFile saves.
+    // Show the outcome of a background SingleFile save as a toast plus an
+    // inline banner. The popup is never closed automatically for SingleFile
+    // saves.
     const showResult = async () => {
       const result = await getSingleFileResult();
       if (!result) return;
@@ -218,13 +220,15 @@ const BookmarkForm = () => {
         return;
       if (shownResultAtRef.current === result.updatedAt) return;
       shownResultAtRef.current = result.updatedAt;
-      console.log("[singlefile] showing result toast:", result);
+      console.log("[singlefile] showing result:", result);
+      setResult({ status: result.status, message: result.message });
       toast({
         title: "Linkwarden",
         description: result.message,
         variant: result.status === "failed" ? "destructive" : "success",
         // The toast store auto-dismisses "success" toasts after 1s, which
         // made the success message effectively invisible; override it.
+        // The popup stays open; the user closes it themselves.
         duration: 5000,
       });
     };
@@ -374,6 +378,17 @@ const BookmarkForm = () => {
           {collectionError ? (
             <p className="text-red-600">
               There was an error, please make sure the website is available.
+            </p>
+          ) : null}
+          {result ? (
+            <p
+              className={`text-sm rounded-md px-2 py-1 ${
+                result.status === "failed"
+                  ? "text-red-600 bg-red-50 dark:bg-red-950"
+                  : "text-green-700 bg-green-50 dark:bg-green-950"
+              }`}
+            >
+              {result.message}
             </p>
           ) : null}
           <FormField

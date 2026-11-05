@@ -217,10 +217,13 @@ const BookmarkForm = () => {
         title: "Linkwarden",
         description: result.message,
         variant: result.status === "failed" ? "destructive" : "success",
+        // The toast store auto-dismisses "success" toasts after 1s, which
+        // made the success message effectively invisible; override it.
+        duration: 5000,
       });
       setTimeout(() => {
         window.close();
-      }, 3500);
+      }, 5000);
     };
     // Also surface a fresh result when the popup is (re)opened after the
     // save already finished.

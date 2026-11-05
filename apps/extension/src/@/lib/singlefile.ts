@@ -138,20 +138,27 @@ export async function captureSingleFile(
     active: true,
     currentWindow: true,
   });
-  const tab = tabs[0];
-  const targetTabId = tabId ?? tab?.id;
+  const activeTab = tabs[0];
+  const targetTabId = tabId ?? activeTab?.id;
 
-  if (!targetTabId) {
+  // Check the tab we actually capture, not whatever is active right now —
+  // the user may have switched tabs since opening the popup.
+  const targetTab =
+    targetTabId !== undefined
+      ? await browser.tabs.get(targetTabId).catch(() => undefined)
+      : activeTab;
+
+  if (!targetTab?.id) {
     throw captureError(
       "finding the tab",
-      "Could not determine the active tab. Try clicking the extension " +
+      "Could not determine the tab to save. Try clicking the extension " +
         "icon again from the tab you want to save."
     );
   }
-  if (!isCapturableUrl(tab?.url)) {
+  if (!isCapturableUrl(targetTab.url)) {
     throw captureError(
       "checking the page",
-      `The page URL "${tab?.url ?? ""}" cannot be saved as a SingleFile ` +
+      `The page URL "${targetTab.url ?? ""}" cannot be saved as a SingleFile ` +
         "snapshot; only http(s) pages are supported."
     );
   }
@@ -159,7 +166,7 @@ export async function captureSingleFile(
   let html: string;
   try {
     html = await Promise.race([
-      captureInTab(targetTabId),
+      captureInTab(targetTab.id),
       new Promise<never>((_, reject) =>
         setTimeout(
           () =>

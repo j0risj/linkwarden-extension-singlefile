@@ -364,12 +364,13 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
       tabTitle = undefined;
     }
   }
-  const savedMessage = tabTitle
-    ? `Saved "${tabTitle}" as a SingleFile snapshot.`
-    : "SingleFile snapshot saved.";
+  const subject = tabTitle ? `"${tabTitle}"` : "the page";
+  const savedMessage = `Saved ${subject} as a SingleFile snapshot.`;
+  const partialSavedMessage = `Saved ${subject}, but some formats were generated server-side — re-archive the link if needed.`;
   const failedMessage = (reason: string) =>
-    (tabTitle ? `Failed to save "${tabTitle}"` : "Failed to save the page") +
-    `: ${reason}`;
+    `Failed to save ${subject}: ${reason}`;
+  const partialFailedMessage = (reason: string) =>
+    `Saved ${subject}, but the save was incomplete: ${reason}`;
 
   const setState = async (phase: "capturing" | "uploading" | null) => {
     if (phase === null) {
@@ -385,6 +386,10 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
       updatedAt: Date.now(),
     });
   };
+
+  // Exactly one notification per save action: success, partial (link saved
+  // but something else failed or fell back), or failure.
+  let fallbackNeeded = false;
 
   try {
     await setSingleFileProgress({
@@ -403,22 +408,25 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
         maxUploadBytes: msg.maxUploadBytes,
         capturePromise: null,
         startCapture: () => captureSingleFile(msg.tabId, msg.maxUploadBytes),
-        onFallbackNeeded: () =>
-          notify(
-            "Linkwarden",
-            "Some formats were generated server-side; re-archive the link if needed."
-          ),
+        onFallbackNeeded: () => {
+          fallbackNeeded = true;
+        },
       }
     );
     await setSingleFileProgress(null);
     if (msg.tabId !== undefined) await updateBadge(msg.tabId, true);
-    notify("Linkwarden", savedMessage);
+    notify(
+      "Linkwarden",
+      fallbackNeeded ? partialSavedMessage : savedMessage
+    );
   } catch (error) {
     await setSingleFileProgress(null);
     console.error(error);
+    const reason = error instanceof Error ? error.message : "unknown error";
+    const linkSaved = (error as { linkSaved?: boolean } | null)?.linkSaved;
     notify(
       "Linkwarden",
-      failedMessage(error instanceof Error ? error.message : "unknown error")
+      linkSaved ? partialFailedMessage(reason) : failedMessage(reason)
     );
   }
 });

@@ -57,7 +57,9 @@ const verifyDerivedFormats = async (
   onFallbackNeeded?: () => void
 ) => {
   const headers = { Authorization: `Bearer ${apiKey}` };
-  const deadline = Date.now() + 10 * 60 * 1000;
+  // lastPreserved is normally set within seconds of the upload; cap the wait
+  // so the caller's outcome is not delayed by a stuck server worker.
+  const deadline = Date.now() + 2 * 60 * 1000;
   let link: any;
   while (Date.now() < deadline) {
     const response = await withRetry(() =>
@@ -223,7 +225,7 @@ export async function postLink(
     }
 
     setState(null);
-    // Awaited (not `void`) so the caller can send a single notification that
+    // Awaited (not `void`) so the caller can report a single outcome that
     // already accounts for formats falling back to server-side generation.
     await verifyDerivedFormats(
       baseUrl,

@@ -183,8 +183,9 @@ export async function postLink(
     } catch (error) {
       // The snapshot and formats are already safe at this point; only the
       // metadata (collection/tags/name) is missing. Tell the user instead of
-      // failing the whole save.
-      throw new Error(
+      // failing the whole save. `linkSaved` lets the caller report a partial
+      // failure instead of a plain one.
+      const err = new Error(
         `The snapshot was saved, but updating its metadata (collection/tags) failed: ${
           error instanceof AxiosError
             ? `${error.response?.status ?? ""} ${JSON.stringify(
@@ -195,22 +196,36 @@ export async function postLink(
               : String(error)
         }. The link is in your default collection; edit it in Linkwarden.`
       );
+      (err as Error & { linkSaved?: boolean }).linkSaved = true;
+      throw err;
     }
 
     if (uploadImage) {
-      const screenshot = await captureScreenshot();
-      await uploadArchive(
-        baseUrl,
-        apiKey,
-        created.id,
-        0,
-        screenshot,
-        "screenshot.png"
-      );
+      try {
+        const screenshot = await captureScreenshot();
+        await uploadArchive(
+          baseUrl,
+          apiKey,
+          created.id,
+          0,
+          screenshot,
+          "screenshot.png"
+        );
+      } catch (error) {
+        const err = new Error(
+          `The snapshot was saved, but uploading the screenshot failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        (err as Error & { linkSaved?: boolean }).linkSaved = true;
+        throw err;
+      }
     }
 
     setState(null);
-    void verifyDerivedFormats(
+    // Awaited (not `void`) so the caller can send a single notification that
+    // already accounts for formats falling back to server-side generation.
+    await verifyDerivedFormats(
       baseUrl,
       apiKey,
       created.id,

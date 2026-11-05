@@ -340,7 +340,13 @@ if (browser.alarms?.onAlarm) {
   });
 }
 
+// Reference-counted: parallel saves must not let the first finisher clear
+// the alarm while another save is still running.
+let saveKeepaliveRefs = 0;
+
 async function startSaveKeepalive() {
+  saveKeepaliveRefs++;
+  if (saveKeepaliveRefs > 1) return;
   if (!browser.alarms?.create) return;
   try {
     await browser.alarms.create(SAVE_KEEPALIVE_ALARM, {
@@ -353,6 +359,8 @@ async function startSaveKeepalive() {
 }
 
 async function stopSaveKeepalive() {
+  saveKeepaliveRefs = Math.max(0, saveKeepaliveRefs - 1);
+  if (saveKeepaliveRefs > 0) return;
   try {
     await browser.alarms?.clear(SAVE_KEEPALIVE_ALARM);
   } catch {
@@ -424,8 +432,9 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
       phase: "capturing",
       updatedAt: Date.now(),
     });
-    // postLink resolves as soon as the upload (and metadata) are done — an
-    // HTTP error there means the snapshot was not stored and no link exists.
+    // postLink resolves as soon as the upload (and metadata) are done, so the
+    // outcome is reported immediately — no waiting for server-side format
+    // derivation.
     await postLink(
       msg.baseUrl,
       msg.uploadImage,

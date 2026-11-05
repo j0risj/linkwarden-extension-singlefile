@@ -34,7 +34,7 @@ const targets: Record<ManifestTarget, TargetOptions> = {
     omnibox: true,
     browserSpecificSettings: {
       gecko: {
-        id: "jordanlinkwarden@gmail.com",
+        id: "linkwarden-with-single-file@jorisjanssen.de",
         strict_min_version: "121.0",
       },
     },
@@ -95,8 +95,15 @@ export function buildManifest(target: ManifestTarget) {
       "tabs",
       ...(options.bookmarks ? ["bookmarks"] : []),
       "contextMenus",
+      "alarms",
     ],
     host_permissions: ["<all_urls>"],
+    web_accessible_resources: [
+      {
+        resources: ["singlefile-core.js"],
+        matches: ["<all_urls>"],
+      },
+    ],
     background: {
       ...(options.serviceWorker ? { service_worker: "background.js" } : {}),
       scripts: ["background.js"],

@@ -18,12 +18,13 @@ import TagInput from "./TagInput.tsx";
 import CollectionInput from "./CollectionInput.tsx";
 import { Textarea } from "./ui/Textarea.tsx";
 import {
+  getBrowser,
   getCurrentTabInfo,
   getStorageItem,
   setStorageItem,
   updateBadge,
 } from "../lib/utils.ts";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { getConfig, isConfigured as getIsConfigured } from "../lib/config.ts";
 import { checkLinkExists, postLink } from "../lib/actions/links.ts";
@@ -35,16 +36,35 @@ import { getShouldUseTagSearch, getTags } from "../lib/actions/tags.ts";
 import { ExternalLink } from "lucide-react";
 import { Checkbox } from "./ui/CheckBox.tsx";
 import { Label } from "./ui/Label.tsx";
+import { isCapturableUrl } from "../lib/singlefile.ts";
+import { getSinglefileConfig } from "../lib/singlefileConfig.ts";
+import {
+  SAVE_SINGLEFILE_MESSAGE,
+  SaveSingleFileMessage,
+} from "../lib/messages.ts";
+import {
+  getSingleFileProgress,
+  getSingleFileResult,
+  SINGLEFILE_PROGRESS_KEY,
+  SINGLEFILE_RESULT_KEY,
+} from "../lib/singlefileProgress.ts";
 
 // The popup is torn down every time it loses focus, so remember whether the
 // user had the extra options expanded and bring them back that way.
 const MORE_OPTIONS_KEY = "lw_more_options_open";
+const SINGLEFILE_CHECKBOX_KEY = "lw_singlefile_checkbox";
 
 const BookmarkForm = () => {
   const [openOptions, setOpenOptions] = useState<boolean>(false);
   const [openCollections, setOpenCollections] = useState<boolean>(false);
   const [uploadImage, setUploadImage] = useState<boolean>(false);
+  const [saveSingleFile, setSaveSingleFile] = useState<boolean>(false);
+  const [singleFileSupported, setSingleFileSupported] = useState<boolean>(true);
+  const [singlefileConfig, setSinglefileConfig] = useState<Awaited<
+    ReturnType<typeof getSinglefileConfig>
+  > | null>(null);
   const [state, setState] = useState<"capturing" | "uploading" | null>(null);
+  const [progress, setProgress] = useState<{ loaded?: number; max?: number } | null>(null);
   const [tagSearch, setTagSearch] = useState<string>("");
 
   const [isConfigured, setIsConfigured] = useState(false);
@@ -61,11 +81,24 @@ const BookmarkForm = () => {
     title: string | undefined;
     url: string | undefined;
   }>();
+  // The storage listener below is registered once, so it must read the
+  // current tab through a ref instead of the stale initial closure value.
+  const tabInfoRef = useRef(tabInfo);
+  tabInfoRef.current = tabInfo;
+  // Remember which result was already toasted so polling + storage events
+  // don't show the same outcome twice.
+  const shownResultAtRef = useRef<number | null>(null);
 
   const handleCheckedChange = (s: boolean | "indeterminate") => {
     if (s === "indeterminate") return;
     setUploadImage(s);
     form.setValue("image", s ? "png" : undefined);
+  };
+
+  const handleSingleFileChange = (s: boolean | "indeterminate") => {
+    if (s === "indeterminate") return;
+    setSaveSingleFile(s);
+    void setStorageItem(SINGLEFILE_CHECKBOX_KEY, s ? "true" : "false");
   };
 
   const handleOptionsToggle = () => {
@@ -90,6 +123,33 @@ const BookmarkForm = () => {
 
   const { mutate: onSubmit, isPending } = useMutation({
     mutationFn: async (values: bookmarkFormValues) => {
+      if (saveSingleFile && singlefileConfig) {
+        if (isDuplicate) {
+          toast({
+            title: "Link already saved",
+            description:
+              "This link already exists in your Linkwarden. SingleFile saves are skipped for duplicates.",
+            variant: "destructive",
+          });
+          return;
+        }
+        // Hand the whole job to the background worker: the popup is
+        // destroyed when it loses focus, which would abort the capture
+        // and upload. The worker keeps running, so the user can switch
+        // to another tab while the SingleFile save is in progress.
+        const message: SaveSingleFileMessage = {
+          type: SAVE_SINGLEFILE_MESSAGE,
+          baseUrl: config?.baseUrl as string,
+          apiKey: config?.apiKey as string,
+          uploadImage,
+          maxUploadBytes: singlefileConfig.maxUploadMB * 1024 * 1024,
+          data: values,
+          tabId: tabInfo?.id,
+        };
+        await getBrowser().runtime.sendMessage(message);
+        return;
+      }
+
       await postLink(
         config?.baseUrl as string,
         uploadImage,
@@ -121,6 +181,12 @@ const BookmarkForm = () => {
       return;
     },
     onSuccess: () => {
+      if (saveSingleFile) {
+        // The background worker finishes the save. Keep the popup open so
+        // the progress overlay and the result toast (delivered via storage)
+        // are visible; the user closes the popup themselves.
+        return;
+      }
       // Update badge to show link is saved
       updateBadge(tabInfo?.id, true);
       setTimeout(() => {
@@ -136,6 +202,58 @@ const BookmarkForm = () => {
   });
 
   useEffect(() => {
+    // A SingleFile save runs in the background worker and outlives this
+    // popup. If one is still in progress when the popup (re)opens, show its
+    // progress overlay again, and follow live updates via storage changes.
+    const syncProgress = async () => {
+      const p = await getSingleFileProgress();
+      if (p) {
+        setState(p.phase);
+        setProgress({ loaded: p.loaded, max: p.max });
+      } else {
+        setState(null);
+        setProgress(null);
+      }
+    };
+    void syncProgress();
+
+    // Show the outcome of a background SingleFile save as a toast. The popup
+    // is never closed automatically for SingleFile saves.
+    const showResult = async () => {
+      const result = await getSingleFileResult();
+      if (!result) return;
+      if (Date.now() - result.updatedAt > 60_000) return;
+      if (result.tabId !== undefined && result.tabId !== tabInfoRef.current?.id)
+        return;
+      if (shownResultAtRef.current === result.updatedAt) return;
+      shownResultAtRef.current = result.updatedAt;
+      console.log("[singlefile] showing result:", result);
+      toast({
+        title: "Linkwarden",
+        description: result.message,
+        variant: result.status === "failed" ? "destructive" : "success",
+        // The toast store auto-dismisses "success" toasts after 1s, which
+        // made the success message effectively invisible; override it.
+        // The popup stays open; the user closes it themselves.
+        duration: 5000,
+      });
+    };
+    // Surface a fresh result when the popup is (re)opened after the save
+    // already finished, on storage events, and via a poll as a fallback in
+    // case the storage event is missed.
+    void showResult();
+    const resultPoll = setInterval(() => void showResult(), 1000);
+
+    const onStorageChanged = (
+      changes: Record<string, unknown>,
+      areaName: string
+    ) => {
+      if (areaName !== "local") return;
+      if (SINGLEFILE_PROGRESS_KEY in changes) void syncProgress();
+      if (SINGLEFILE_RESULT_KEY in changes) void showResult();
+    };
+    getBrowser().storage.onChanged.addListener(onStorageChanged);
+
     const setTabInformation = async () => {
       setOpenOptions((await getStorageItem(MORE_OPTIONS_KEY)) === "true");
 
@@ -144,6 +262,11 @@ const BookmarkForm = () => {
 
       setTabInfo(t);
       setConfig(c);
+      setSingleFileSupported(isCapturableUrl(t.url));
+      setSaveSingleFile(
+        (await getStorageItem(SINGLEFILE_CHECKBOX_KEY)) === "true"
+      );
+      setSinglefileConfig(await getSinglefileConfig());
 
       form.setValue("url", t.url ? t.url : "");
       form.setValue("name", t.title ? t.title : "");
@@ -162,6 +285,11 @@ const BookmarkForm = () => {
     };
 
     setTabInformation();
+
+    return () => {
+      getBrowser().storage.onChanged.removeListener(onStorageChanged);
+      clearInterval(resultPoll);
+    };
   }, []);
 
   const { handleSubmit, control } = form;
@@ -279,13 +407,34 @@ const BookmarkForm = () => {
           />
 
           {!openOptions && (
-            <Label className="flex items-center gap-2 w-fit cursor-pointer">
-              <Checkbox
-                checked={uploadImage}
-                onCheckedChange={handleCheckedChange}
-              />
-              Upload image from browser
-            </Label>
+            <>
+              <Label className="flex items-center gap-2 w-fit cursor-pointer">
+                <Checkbox
+                  checked={uploadImage}
+                  onCheckedChange={handleCheckedChange}
+                />
+                Upload image from browser
+              </Label>
+              <Label
+                className={`flex items-center gap-2 w-fit ${
+                  singleFileSupported
+                    ? "cursor-pointer"
+                    : "cursor-not-allowed opacity-50"
+                }`}
+                title={
+                  singleFileSupported
+                    ? undefined
+                    : "This page cannot be saved as a SingleFile snapshot"
+                }
+              >
+                <Checkbox
+                  checked={saveSingleFile}
+                  disabled={!singleFileSupported}
+                  onCheckedChange={handleSingleFileChange}
+                />
+                Save SingleFile
+              </Label>
+            </>
           )}
 
           {openOptions && (
@@ -363,13 +512,34 @@ const BookmarkForm = () => {
               />
 
               {openOptions && (
-                <Label className="flex items-center gap-2 w-fit cursor-pointer">
-                  <Checkbox
-                    checked={uploadImage}
-                    onCheckedChange={handleCheckedChange}
-                  />
-                  Upload image from browser
-                </Label>
+                <>
+                  <Label className="flex items-center gap-2 w-fit cursor-pointer">
+                    <Checkbox
+                      checked={uploadImage}
+                      onCheckedChange={handleCheckedChange}
+                    />
+                    Upload image from browser
+                  </Label>
+                  <Label
+                    className={`flex items-center gap-2 w-fit ${
+                      singleFileSupported
+                        ? "cursor-pointer"
+                        : "cursor-not-allowed opacity-50"
+                    }`}
+                    title={
+                      singleFileSupported
+                        ? undefined
+                        : "This page cannot be saved as a SingleFile snapshot"
+                    }
+                  >
+                    <Checkbox
+                      checked={saveSingleFile}
+                      disabled={!singleFileSupported}
+                      onCheckedChange={handleSingleFileChange}
+                    />
+                    Save SingleFile
+                  </Label>
+                </>
               )}
             </>
           )}
@@ -435,11 +605,14 @@ const BookmarkForm = () => {
               ></path>
             </svg>
 
-            <p className="text-xl mt-1">
-              {state === "capturing"
-                ? "Capturing the page..."
-                : "Uploading image..."}
+            <p className="text-xl mt-1 text-center">
+              {state === "capturing" ? "Capturing the page..." : "Uploading image..."}
             </p>
+            {state === "capturing" && progress?.max ? (
+              <p className="text-sm text-zinc-300 text-center">
+                {progress.loaded ?? 0}/{progress.max} resources
+              </p>
+            ) : null}
             <p className="text-xs text-center max-w-xs">
               Please do not close this window, this may take a few seconds
               depending on the size of the page.

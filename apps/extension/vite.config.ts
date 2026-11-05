@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import * as esbuild from "esbuild";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 import { buildManifest, resolveTarget, version } from "./manifest.config";
@@ -60,8 +61,33 @@ function manifest(): Plugin {
   };
 }
 
+// single-file-core must be a classic script (no top-level import/export)
+// because it is injected with scripting.executeScript({ files: [...] }),
+// and Vite only emits ES modules — so bundle it with esbuild as an IIFE
+// exposing a `singleFileCore` global instead.
+function singleFileCore(): Plugin {
+  return {
+    name: "linkwarden:singlefile-core",
+    apply: "build",
+    async writeBundle() {
+      await esbuild.build({
+        entryPoints: [
+          path.resolve(__dirname, "../../node_modules/single-file-core/single-file.js"),
+        ],
+        bundle: true,
+        format: "iife",
+        globalName: "singleFileCore",
+        outfile: path.resolve(__dirname, "dist/singlefile-core.js"),
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), manifest()],
+  plugins: [react(), manifest(), singleFileCore()],
+  define: {
+    __BUILD_VERSION__: JSON.stringify(process.env.GIT_HASH || "dev"),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

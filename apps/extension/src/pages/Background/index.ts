@@ -10,8 +10,23 @@ import { getConfig, isConfigured } from "../../@/lib/config.ts";
 import {
   // deleteLinkFetch,
   // updateLinkFetch,
+  postLink,
   postLinkFetch,
 } from "../../@/lib/actions/links.ts";
+import {
+  captureSingleFile,
+  SINGLEFILE_PROGRESS_MESSAGE,
+} from "../../@/lib/singlefile.ts";
+import {
+  SAVE_SINGLEFILE_MESSAGE,
+  SaveSingleFileMessage,
+} from "../../@/lib/messages.ts";
+import {
+  getSingleFileProgress,
+  setSingleFileProgress,
+  setSingleFileResult,
+  SingleFileResultStatus,
+} from "../../@/lib/singlefileProgress.ts";
 import {
   bookmarkMetadata,
   // deleteBookmarkMetadata,
@@ -298,6 +313,157 @@ browser.runtime.onInstalled.addListener(async function () {
     title: "Save all tabs to Linkwarden",
     contexts: ["page"],
   });
+});
+
+// Record the outcome in storage; an open (or reopened) popup turns it into
+// a toast. No desktop notifications.
+async function reportOutcome(
+  status: SingleFileResultStatus,
+  message: string,
+  tabId?: number
+) {
+  await setSingleFileResult({ status, message, tabId, updatedAt: Date.now() });
+}
+
+// A pending runtime.onMessage promise does NOT keep an MV3 service worker
+// alive; the worker can be killed mid-save, which would abort the save. A
+// repeating alarm wakes the worker every 30s and resets its idle timer for
+// the duration of the save.
+const SAVE_KEEPALIVE_ALARM = "lw-singlefile-save";
+
+// Guarded so a missing alarms API (e.g. the extension was not reloaded
+// after the permission was added) cannot take down the whole worker script.
+if (browser.alarms?.onAlarm) {
+  browser.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== SAVE_KEEPALIVE_ALARM) return;
+    // The alarm firing is enough to reset the idle timer; nothing else to do.
+  });
+}
+
+// Reference-counted: parallel saves must not let the first finisher clear
+// the alarm while another save is still running.
+let saveKeepaliveRefs = 0;
+
+async function startSaveKeepalive() {
+  saveKeepaliveRefs++;
+  if (saveKeepaliveRefs > 1) return;
+  if (!browser.alarms?.create) return;
+  try {
+    await browser.alarms.create(SAVE_KEEPALIVE_ALARM, {
+      periodInMinutes: 0.5,
+    });
+  } catch {
+    // Older Chrome builds enforce a 1 minute minimum period.
+    await browser.alarms.create(SAVE_KEEPALIVE_ALARM, { periodInMinutes: 1 });
+  }
+}
+
+async function stopSaveKeepalive() {
+  saveKeepaliveRefs = Math.max(0, saveKeepaliveRefs - 1);
+  if (saveKeepaliveRefs > 0) return;
+  try {
+    await browser.alarms?.clear(SAVE_KEEPALIVE_ALARM);
+  } catch {
+    // Best effort.
+  }
+}
+
+browser.runtime.onMessage.addListener(async (message: unknown) => {
+  // Progress events from the injected single-file-core capture script. They
+  // arrive while a save is running in this worker; keep them in storage so a
+  // reopened popup can show the progress again.
+  const progressMsg = message as {
+    type?: string;
+    loaded?: number;
+    max?: number;
+  };
+  if (progressMsg?.type === SINGLEFILE_PROGRESS_MESSAGE) {
+    const current = await getSingleFileProgress();
+    if (current) {
+      await setSingleFileProgress({
+        ...current,
+        loaded: progressMsg.loaded,
+        max: progressMsg.max,
+        updatedAt: Date.now(),
+      });
+    }
+    return;
+  }
+
+  const msg = message as SaveSingleFileMessage;
+  if (!msg || msg.type !== SAVE_SINGLEFILE_MESSAGE) return;
+
+  // Resolve the tab title once so the result message can say which tab
+  // finished; the tab may already be gone, so never fail on this.
+  let tabTitle: string | undefined;
+  if (msg.tabId !== undefined) {
+    try {
+      tabTitle = (await browser.tabs.get(msg.tabId)).title;
+    } catch {
+      tabTitle = undefined;
+    }
+  }
+  const subject = tabTitle ? `"${tabTitle}"` : "the page";
+  const savedMessage = `Saved ${subject} as a SingleFile snapshot.`;
+  const failedMessage = (reason: string) =>
+    `Failed to save ${subject}: ${reason}`;
+  const partialFailedMessage = (reason: string) =>
+    `Saved ${subject}, but the upload failed: ${reason}`;
+
+  const setState = async (phase: "capturing" | "uploading" | null) => {
+    if (phase === null) {
+      await setSingleFileProgress(null);
+      return;
+    }
+    const current = await getSingleFileProgress();
+    await setSingleFileProgress({
+      active: true,
+      phase,
+      loaded: current?.loaded,
+      max: current?.max,
+      updatedAt: Date.now(),
+    });
+  };
+
+  try {
+    await startSaveKeepalive();
+    await setSingleFileProgress({
+      active: true,
+      phase: "capturing",
+      updatedAt: Date.now(),
+    });
+    // postLink resolves as soon as the upload (and metadata) are done, so the
+    // outcome is reported immediately — no waiting for server-side format
+    // derivation.
+    await postLink(
+      msg.baseUrl,
+      msg.uploadImage,
+      msg.data,
+      setState,
+      msg.apiKey,
+      {
+        enabled: true,
+        maxUploadBytes: msg.maxUploadBytes,
+        capturePromise: null,
+        startCapture: () => captureSingleFile(msg.tabId, msg.maxUploadBytes),
+      }
+    );
+    await setSingleFileProgress(null);
+
+    if (msg.tabId !== undefined) await updateBadge(msg.tabId, true);
+    await reportOutcome("success", savedMessage, msg.tabId);
+  } catch (error) {
+    await setSingleFileProgress(null);
+    console.error(error);
+    const reason = error instanceof Error ? error.message : "unknown error";
+    const linkSaved = (error as { linkSaved?: boolean } | null)?.linkSaved;
+    const message = linkSaved
+      ? partialFailedMessage(reason)
+      : failedMessage(reason);
+    await reportOutcome(linkSaved ? "partial" : "failed", message, msg.tabId);
+  } finally {
+    await stopSaveKeepalive();
+  }
 });
 
 browser.tabs.onUpdated.addListener(async (tabId, changeInfo) => {

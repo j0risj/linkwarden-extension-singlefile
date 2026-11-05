@@ -2,6 +2,7 @@ import WholeContainer from "../../@/components/WholeContainer.tsx";
 import Container from "../../@/components/Container.tsx";
 import { Separator } from "../../@/components/ui/Separator.tsx";
 import OptionsForm from "../../@/components/OptionsForm.tsx";
+import SinglefileSettings from "../../@/components/SinglefileSettings.tsx";
 import { configType } from "../../@/lib/validators/config.ts";
 
 const App = ({ initialConfig }: { initialConfig: configType }) => {
@@ -15,6 +16,7 @@ const App = ({ initialConfig }: { initialConfig: configType }) => {
           <Separator />
         </div>
         <OptionsForm initialConfig={initialConfig} />
+        <SinglefileSettings />
       </Container>
     </WholeContainer>
   );

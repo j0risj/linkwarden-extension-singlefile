@@ -315,37 +315,20 @@ browser.runtime.onInstalled.addListener(async function () {
   });
 });
 
-// SingleFile saves run here, not in the popup: the popup is destroyed as soon
-// as it loses focus, which would abort an in-flight capture/upload. The
-// background worker keeps running, so the user can freely switch tabs.
-function notify(title: string, message: string) {
-  try {
-    chrome.notifications?.create({
-      type: "basic",
-      iconUrl: "128.png",
-      title,
-      message,
-    });
-  } catch (error) {
-    console.error("Failed to show notification:", error);
-  }
-}
-
-// Report the outcome on both channels: a desktop notification always, and a
-// storage entry that an open popup turns into a toast.
+// Record the outcome in storage; an open (or reopened) popup turns it into
+// a toast. No desktop notifications.
 async function reportOutcome(
   status: SingleFileResultStatus,
   message: string,
   tabId?: number
 ) {
-  notify("Linkwarden", message);
   await setSingleFileResult({ status, message, tabId, updatedAt: Date.now() });
 }
 
 // A pending runtime.onMessage promise does NOT keep an MV3 service worker
-// alive; the worker can be killed mid-save, which silently dropped the
-// outcome notification. A repeating alarm wakes the worker every 30s and
-// resets its idle timer for the duration of the save.
+// alive; the worker can be killed mid-save, which would abort the save. A
+// repeating alarm wakes the worker every 30s and resets its idle timer for
+// the duration of the save.
 const SAVE_KEEPALIVE_ALARM = "lw-singlefile-save";
 
 // Guarded so a missing alarms API (e.g. the extension was not reloaded
@@ -402,7 +385,7 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
   const msg = message as SaveSingleFileMessage;
   if (!msg || msg.type !== SAVE_SINGLEFILE_MESSAGE) return;
 
-  // Resolve the tab title once so the notifications can say which tab
+  // Resolve the tab title once so the result message can say which tab
   // finished; the tab may already be gone, so never fail on this.
   let tabTitle: string | undefined;
   if (msg.tabId !== undefined) {
@@ -435,10 +418,9 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
     });
   };
 
-  // Exactly one notification per save action: success, partial (link saved
-  // but a later step failed), or failure. If the SingleFile snapshot never
-  // landed, the link is deleted again — a link without its snapshot is not
-  // saved at all.
+  // Exactly one result per save action: success, partial (link saved but a
+  // later step failed), or failure. If the SingleFile snapshot never landed,
+  // the link is deleted again — a link without its snapshot is not saved.
   let fallbackNeeded = false;
 
   try {

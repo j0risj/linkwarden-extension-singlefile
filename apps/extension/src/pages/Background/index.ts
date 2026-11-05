@@ -366,7 +366,10 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
   }
   const subject = tabTitle ? `"${tabTitle}"` : "the page";
   const savedMessage = `Saved ${subject} as a SingleFile snapshot.`;
-  const partialSavedMessage = `Saved ${subject}, but some formats were generated server-side — re-archive the link if needed.`;
+  // verifyDerivedFormats reports "unavailable" derived formats only when the
+  // uploaded snapshot never landed, so this really means the SingleFile
+  // archive upload failed and the link was saved without it.
+  const partialSavedMessage = `Saved ${subject}, but the SingleFile upload failed — the link was saved without the snapshot. Re-archive it if needed.`;
   const failedMessage = (reason: string) =>
     `Failed to save ${subject}: ${reason}`;
   const partialFailedMessage = (reason: string) =>

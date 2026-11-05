@@ -8,7 +8,7 @@ export interface SaveSingleFileOptions {
   maxUploadBytes: number;
   capturePromise: Promise<{ html: string; blob: Blob }> | null;
   startCapture: () => Promise<{ html: string; blob: Blob }>;
-  onFallbackNeeded?: () => void;
+  onFallbackNeeded?: (linkId: number) => void;
 }
 
 const withRetry = async <T>(fn: () => Promise<T>, attempts = 3): Promise<T> => {
@@ -225,13 +225,10 @@ export async function postLink(
     }
 
     setState(null);
-    // Awaited (not `void`) so the caller can report a single outcome that
-    // already accounts for formats falling back to server-side generation.
-    await verifyDerivedFormats(
-      baseUrl,
-      apiKey,
-      created.id,
-      singlefile.onFallbackNeeded
+    // Detached on purpose: the caller reports the outcome as soon as the
+    // upload is done, without waiting for the server to derive formats.
+    void verifyDerivedFormats(baseUrl, apiKey, created.id, () =>
+      singlefile.onFallbackNeeded?.(created.id)
     );
 
     return link;

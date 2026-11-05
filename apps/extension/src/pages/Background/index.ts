@@ -8,7 +8,7 @@ import {
 // import BookmarkTreeNode = chrome.bookmarks.BookmarkTreeNode;
 import { getConfig, isConfigured } from "../../@/lib/config.ts";
 import {
-  deleteLinkFetch,
+  // deleteLinkFetch,
   // updateLinkFetch,
   postLink,
   postLinkFetch,
@@ -326,9 +326,9 @@ async function reportOutcome(
 }
 
 // A pending runtime.onMessage promise does NOT keep an MV3 service worker
-// alive; the worker can be killed mid-save, which silently dropped the
-// outcome notification. A repeating alarm wakes the worker every 30s and
-// resets its idle timer for the duration of the save.
+// alive; the worker can be killed mid-save, which would abort the save. A
+// repeating alarm wakes the worker every 30s and resets its idle timer for
+// the duration of the save.
 const SAVE_KEEPALIVE_ALARM = "lw-singlefile-save";
 
 // Guarded so a missing alarms API (e.g. the extension was not reloaded
@@ -385,7 +385,7 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
   const msg = message as SaveSingleFileMessage;
   if (!msg || msg.type !== SAVE_SINGLEFILE_MESSAGE) return;
 
-  // Resolve the tab title once so the notifications can say which tab
+  // Resolve the tab title once so the result message can say which tab
   // finished; the tab may already be gone, so never fail on this.
   let tabTitle: string | undefined;
   if (msg.tabId !== undefined) {
@@ -397,7 +397,6 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
   }
   const subject = tabTitle ? `"${tabTitle}"` : "the page";
   const savedMessage = `Saved ${subject} as a SingleFile snapshot.`;
-  const uploadFailedMessage = `Failed to save ${subject}: the SingleFile upload failed, so the link was not saved.`;
   const failedMessage = (reason: string) =>
     `Failed to save ${subject}: ${reason}`;
   const partialFailedMessage = (reason: string) =>
@@ -418,18 +417,6 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
     });
   };
 
-  // If the derived formats later come back "unavailable", the uploaded
-  // snapshot never landed: delete the link again (a link without its
-  // snapshot is not saved) and correct the outcome.
-  const handleFallback = async (linkId: number) => {
-    try {
-      await deleteLinkFetch(msg.baseUrl, linkId, msg.apiKey);
-    } catch (error) {
-      console.error("Failed to delete the link after a failed upload:", error);
-    }
-    await reportOutcome("failed", uploadFailedMessage, msg.tabId);
-  };
-
   try {
     await startSaveKeepalive();
     await setSingleFileProgress({
@@ -437,9 +424,8 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
       phase: "capturing",
       updatedAt: Date.now(),
     });
-    // postLink resolves as soon as the upload (and metadata) are done, so the
-    // outcome is reported immediately — no waiting for server-side format
-    // derivation.
+    // postLink resolves as soon as the upload (and metadata) are done — an
+    // HTTP error there means the snapshot was not stored and no link exists.
     await postLink(
       msg.baseUrl,
       msg.uploadImage,
@@ -451,7 +437,6 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
         maxUploadBytes: msg.maxUploadBytes,
         capturePromise: null,
         startCapture: () => captureSingleFile(msg.tabId, msg.maxUploadBytes),
-        onFallbackNeeded: (linkId) => void handleFallback(linkId),
       }
     );
     await setSingleFileProgress(null);

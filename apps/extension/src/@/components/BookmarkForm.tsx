@@ -175,7 +175,7 @@ const BookmarkForm = () => {
       if (saveSingleFile) {
         // The background worker finishes the save. Keep the popup open so
         // the progress overlay and the result toast (delivered via storage)
-        // are visible; the popup closes once the result arrives.
+        // are visible; the user closes the popup themselves.
         return;
       }
       // Update badge to show link is saved
@@ -208,8 +208,8 @@ const BookmarkForm = () => {
     };
     void syncProgress();
 
-    // Show the outcome of a background SingleFile save as a toast (a desktop
-    // notification is always sent too), then close the popup shortly after.
+    // Show the outcome of a background SingleFile save as a toast. The popup
+    // is never closed automatically for SingleFile saves.
     const showResult = async () => {
       const result = await getSingleFileResult();
       if (!result) return;
@@ -227,9 +227,6 @@ const BookmarkForm = () => {
         // made the success message effectively invisible; override it.
         duration: 5000,
       });
-      setTimeout(() => {
-        window.close();
-      }, 5000);
     };
     // Surface a fresh result when the popup is (re)opened after the save
     // already finished, on storage events, and via a poll as a fallback in

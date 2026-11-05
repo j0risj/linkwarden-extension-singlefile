@@ -96,6 +96,7 @@ export function buildManifest(target: ManifestTarget) {
       ...(options.bookmarks ? ["bookmarks"] : []),
       "contextMenus",
       "notifications",
+      "alarms",
     ],
     host_permissions: ["<all_urls>"],
     web_accessible_resources: [

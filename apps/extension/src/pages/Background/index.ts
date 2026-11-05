@@ -326,9 +326,9 @@ async function reportOutcome(
 }
 
 // A pending runtime.onMessage promise does NOT keep an MV3 service worker
-// alive; the worker can be killed mid-save, which would abort the save. A
-// repeating alarm wakes the worker every 30s and resets its idle timer for
-// the duration of the save.
+// alive; the worker can be killed mid-save, which silently dropped the
+// outcome notification. A repeating alarm wakes the worker every 30s and
+// resets its idle timer for the duration of the save.
 const SAVE_KEEPALIVE_ALARM = "lw-singlefile-save";
 
 // Guarded so a missing alarms API (e.g. the extension was not reloaded
@@ -385,7 +385,7 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
   const msg = message as SaveSingleFileMessage;
   if (!msg || msg.type !== SAVE_SINGLEFILE_MESSAGE) return;
 
-  // Resolve the tab title once so the result message can say which tab
+  // Resolve the tab title once so the notifications can say which tab
   // finished; the tab may already be gone, so never fail on this.
   let tabTitle: string | undefined;
   if (msg.tabId !== undefined) {
@@ -418,10 +418,17 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
     });
   };
 
-  // Exactly one result per save action: success, partial (link saved but a
-  // later step failed), or failure. If the SingleFile snapshot never landed,
-  // the link is deleted again — a link without its snapshot is not saved.
-  let fallbackNeeded = false;
+  // If the derived formats later come back "unavailable", the uploaded
+  // snapshot never landed: delete the link again (a link without its
+  // snapshot is not saved) and correct the outcome.
+  const handleFallback = async (linkId: number) => {
+    try {
+      await deleteLinkFetch(msg.baseUrl, linkId, msg.apiKey);
+    } catch (error) {
+      console.error("Failed to delete the link after a failed upload:", error);
+    }
+    await reportOutcome("failed", uploadFailedMessage, msg.tabId);
+  };
 
   try {
     await startSaveKeepalive();
@@ -430,7 +437,10 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
       phase: "capturing",
       updatedAt: Date.now(),
     });
-    const link = await postLink(
+    // postLink resolves as soon as the upload (and metadata) are done, so the
+    // outcome is reported immediately — no waiting for server-side format
+    // derivation.
+    await postLink(
       msg.baseUrl,
       msg.uploadImage,
       msg.data,
@@ -441,28 +451,10 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
         maxUploadBytes: msg.maxUploadBytes,
         capturePromise: null,
         startCapture: () => captureSingleFile(msg.tabId, msg.maxUploadBytes),
-        onFallbackNeeded: () => {
-          fallbackNeeded = true;
-        },
+        onFallbackNeeded: (linkId) => void handleFallback(linkId),
       }
     );
     await setSingleFileProgress(null);
-
-    if (fallbackNeeded) {
-      // verifyDerivedFormats only reports "unavailable" formats when the
-      // uploaded snapshot never landed: the SingleFile upload failed.
-      // Delete the link so nothing is saved without its snapshot.
-      const linkId = link?.data?.response?.id;
-      if (linkId !== undefined && linkId !== null) {
-        try {
-          await deleteLinkFetch(msg.baseUrl, linkId, msg.apiKey);
-        } catch (error) {
-          console.error("Failed to delete the link after a failed upload:", error);
-        }
-      }
-      await reportOutcome("failed", uploadFailedMessage, msg.tabId);
-      return;
-    }
 
     if (msg.tabId !== undefined) await updateBadge(msg.tabId, true);
     await reportOutcome("success", savedMessage, msg.tabId);

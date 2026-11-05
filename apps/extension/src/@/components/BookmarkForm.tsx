@@ -85,6 +85,9 @@ const BookmarkForm = () => {
   // current tab through a ref instead of the stale initial closure value.
   const tabInfoRef = useRef(tabInfo);
   tabInfoRef.current = tabInfo;
+  // Remember which result was already toasted so polling + storage events
+  // don't show the same outcome twice.
+  const shownResultAtRef = useRef<number | null>(null);
 
   const handleCheckedChange = (s: boolean | "indeterminate") => {
     if (s === "indeterminate") return;
@@ -213,6 +216,9 @@ const BookmarkForm = () => {
       if (Date.now() - result.updatedAt > 60_000) return;
       if (result.tabId !== undefined && result.tabId !== tabInfoRef.current?.id)
         return;
+      if (shownResultAtRef.current === result.updatedAt) return;
+      shownResultAtRef.current = result.updatedAt;
+      console.log("[singlefile] showing result toast:", result);
       toast({
         title: "Linkwarden",
         description: result.message,
@@ -225,9 +231,11 @@ const BookmarkForm = () => {
         window.close();
       }, 5000);
     };
-    // Also surface a fresh result when the popup is (re)opened after the
-    // save already finished.
+    // Surface a fresh result when the popup is (re)opened after the save
+    // already finished, on storage events, and via a poll as a fallback in
+    // case the storage event is missed.
     void showResult();
+    const resultPoll = setInterval(() => void showResult(), 1000);
 
     const onStorageChanged = (
       changes: Record<string, unknown>,
@@ -273,6 +281,7 @@ const BookmarkForm = () => {
 
     return () => {
       getBrowser().storage.onChanged.removeListener(onStorageChanged);
+      clearInterval(resultPoll);
     };
   }, []);
 

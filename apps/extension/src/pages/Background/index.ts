@@ -24,6 +24,8 @@ import {
 import {
   getSingleFileProgress,
   setSingleFileProgress,
+  setSingleFileResult,
+  SingleFileResultStatus,
 } from "../../@/lib/singlefileProgress.ts";
 import {
   bookmarkMetadata,
@@ -329,6 +331,17 @@ function notify(title: string, message: string) {
   }
 }
 
+// Report the outcome on both channels: a desktop notification always, and a
+// storage entry that an open popup turns into a toast.
+async function reportOutcome(
+  status: SingleFileResultStatus,
+  message: string,
+  tabId?: number
+) {
+  notify("Linkwarden", message);
+  await setSingleFileResult({ status, message, tabId, updatedAt: Date.now() });
+}
+
 browser.runtime.onMessage.addListener(async (message: unknown) => {
   // Progress events from the injected single-file-core capture script. They
   // arrive while a save is running in this worker; keep them in storage so a
@@ -429,21 +442,21 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
           console.error("Failed to delete the link after a failed upload:", error);
         }
       }
-      notify("Linkwarden", uploadFailedMessage);
+      await reportOutcome("failed", uploadFailedMessage, msg.tabId);
       return;
     }
 
     if (msg.tabId !== undefined) await updateBadge(msg.tabId, true);
-    notify("Linkwarden", savedMessage);
+    await reportOutcome("success", savedMessage, msg.tabId);
   } catch (error) {
     await setSingleFileProgress(null);
     console.error(error);
     const reason = error instanceof Error ? error.message : "unknown error";
     const linkSaved = (error as { linkSaved?: boolean } | null)?.linkSaved;
-    notify(
-      "Linkwarden",
-      linkSaved ? partialFailedMessage(reason) : failedMessage(reason)
-    );
+    const message = linkSaved
+      ? partialFailedMessage(reason)
+      : failedMessage(reason);
+    await reportOutcome(linkSaved ? "partial" : "failed", message, msg.tabId);
   }
 });
 

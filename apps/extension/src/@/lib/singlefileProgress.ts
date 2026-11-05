@@ -34,3 +34,35 @@ export async function setSingleFileProgress(
 ): Promise<void> {
   await setStorageItem(SINGLEFILE_PROGRESS_KEY, JSON.stringify(progress));
 }
+
+export type SingleFileResultStatus = "success" | "partial" | "failed";
+
+export interface SingleFileResult {
+  status: SingleFileResultStatus;
+  message: string;
+  tabId?: number;
+  updatedAt: number;
+}
+
+export const SINGLEFILE_RESULT_KEY = "lw_singlefile_result";
+
+/**
+ * Final outcome of a background SingleFile save. The background worker writes
+ * it once per save (the desktop notification is the other channel); an open
+ * popup turns it into a toast.
+ */
+export async function getSingleFileResult(): Promise<SingleFileResult | null> {
+  const raw = await getStorageItem(SINGLEFILE_RESULT_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as SingleFileResult | null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setSingleFileResult(
+  result: SingleFileResult | null
+): Promise<void> {
+  await setStorageItem(SINGLEFILE_RESULT_KEY, JSON.stringify(result));
+}

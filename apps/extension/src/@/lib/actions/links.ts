@@ -8,7 +8,6 @@ export interface SaveSingleFileOptions {
   maxUploadBytes: number;
   capturePromise: Promise<{ html: string; blob: Blob }> | null;
   startCapture: () => Promise<{ html: string; blob: Blob }>;
-  onFallbackNeeded?: (linkId: number) => void;
 }
 
 const withRetry = async <T>(fn: () => Promise<T>, attempts = 3): Promise<T> => {
@@ -50,32 +49,6 @@ const uploadArchive = async (
   );
 };
 
-const verifyDerivedFormats = async (
-  baseUrl: string,
-  apiKey: string,
-  linkId: number,
-  onFallbackNeeded?: () => void
-) => {
-  const headers = { Authorization: `Bearer ${apiKey}` };
-  // lastPreserved is normally set within seconds of the upload; cap the wait
-  // so the caller's outcome is not delayed by a stuck server worker.
-  const deadline = Date.now() + 2 * 60 * 1000;
-  let link: any;
-  while (Date.now() < deadline) {
-    const response = await withRetry(() =>
-      axios.get(`${baseUrl}/api/v1/links/${linkId}`, { headers })
-    );
-    link = response.data.response;
-    if (link?.lastPreserved) break;
-    await new Promise((r) => setTimeout(r, 10000));
-  }
-  if (!link?.lastPreserved) return;
-  const unavailable = [link.readable, link.image, link.pdf].some(
-    (format) => format === "unavailable"
-  );
-  if (unavailable) onFallbackNeeded?.();
-};
-
 export async function postLink(
   baseUrl: string,
   uploadImage: boolean,
@@ -105,12 +78,10 @@ export async function postLink(
 
     // Upload-first flow: POST /api/v1/archives?format=4 creates the link and
     // stores the snapshot in one atomic request (this is the endpoint the
-    // SingleFile browser extension targets). The server pins lastPreserved to
-    // the epoch until the file is on disk, so the worker can never process the
-    // link mid-upload; afterwards lastPreserved is null and the worker derives
-    // the other formats from the uploaded snapshot. The link starts in the
-    // default collection with a title extracted from the snapshot, and the
-    // dialog's metadata is applied with a PUT right after.
+    // SingleFile browser extension targets), so an HTTP error here means no
+    // link was created at all. The link starts in the default collection with
+    // a title extracted from the snapshot, and the dialog's metadata is
+    // applied with a PUT right after.
     let link;
     try {
       const formData = new FormData();
@@ -183,10 +154,9 @@ export async function postLink(
         )
       );
     } catch (error) {
-      // The snapshot and formats are already safe at this point; only the
-      // metadata (collection/tags/name) is missing. Tell the user instead of
-      // failing the whole save. `linkSaved` lets the caller report a partial
-      // failure instead of a plain one.
+      // The snapshot is already safe at this point; only the metadata
+      // (collection/tags/name) is missing. `linkSaved` lets the caller report
+      // a partial failure instead of a plain one.
       const err = new Error(
         `The snapshot was saved, but updating its metadata (collection/tags) failed: ${
           error instanceof AxiosError
@@ -225,11 +195,6 @@ export async function postLink(
     }
 
     setState(null);
-    // Detached on purpose: the caller reports the outcome as soon as the
-    // upload is done, without waiting for the server to derive formats.
-    void verifyDerivedFormats(baseUrl, apiKey, created.id, () =>
-      singlefile.onFallbackNeeded?.(created.id)
-    );
 
     return link;
   }

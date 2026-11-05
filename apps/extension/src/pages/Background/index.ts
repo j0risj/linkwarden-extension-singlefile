@@ -348,12 +348,17 @@ async function reportOutcome(
 // resets its idle timer for the duration of the save.
 const SAVE_KEEPALIVE_ALARM = "lw-singlefile-save";
 
-browser.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== SAVE_KEEPALIVE_ALARM) return;
-  // The alarm firing is enough to reset the idle timer; nothing else to do.
-});
+// Guarded so a missing alarms API (e.g. the extension was not reloaded
+// after the permission was added) cannot take down the whole worker script.
+if (browser.alarms?.onAlarm) {
+  browser.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== SAVE_KEEPALIVE_ALARM) return;
+    // The alarm firing is enough to reset the idle timer; nothing else to do.
+  });
+}
 
 async function startSaveKeepalive() {
+  if (!browser.alarms?.create) return;
   try {
     await browser.alarms.create(SAVE_KEEPALIVE_ALARM, {
       periodInMinutes: 0.5,
@@ -366,7 +371,7 @@ async function startSaveKeepalive() {
 
 async function stopSaveKeepalive() {
   try {
-    await browser.alarms.clear(SAVE_KEEPALIVE_ALARM);
+    await browser.alarms?.clear(SAVE_KEEPALIVE_ALARM);
   } catch {
     // Best effort.
   }

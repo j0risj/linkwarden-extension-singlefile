@@ -370,7 +370,7 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
   const failedMessage = (reason: string) =>
     `Failed to save ${subject}: ${reason}`;
   const partialFailedMessage = (reason: string) =>
-    `Saved ${subject}, but the save was incomplete: ${reason}`;
+    `Saved ${subject}, but the upload failed: ${reason}`;
 
   const setState = async (phase: "capturing" | "uploading" | null) => {
     if (phase === null) {

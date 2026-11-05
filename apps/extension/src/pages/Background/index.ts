@@ -8,7 +8,7 @@ import {
 // import BookmarkTreeNode = chrome.bookmarks.BookmarkTreeNode;
 import { getConfig, isConfigured } from "../../@/lib/config.ts";
 import {
-  // deleteLinkFetch,
+  deleteLinkFetch,
   // updateLinkFetch,
   postLink,
   postLinkFetch,
@@ -366,10 +366,7 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
   }
   const subject = tabTitle ? `"${tabTitle}"` : "the page";
   const savedMessage = `Saved ${subject} as a SingleFile snapshot.`;
-  // verifyDerivedFormats reports "unavailable" derived formats only when the
-  // uploaded snapshot never landed, so this really means the SingleFile
-  // archive upload failed and the link was saved without it.
-  const partialSavedMessage = `Saved ${subject}, but the SingleFile upload failed — the link was saved without the snapshot. Re-archive it if needed.`;
+  const uploadFailedMessage = `Failed to save ${subject}: the SingleFile upload failed, so the link was not saved.`;
   const failedMessage = (reason: string) =>
     `Failed to save ${subject}: ${reason}`;
   const partialFailedMessage = (reason: string) =>
@@ -391,7 +388,9 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
   };
 
   // Exactly one notification per save action: success, partial (link saved
-  // but something else failed or fell back), or failure.
+  // but a later step failed), or failure. If the SingleFile snapshot never
+  // landed, the link is deleted again — a link without its snapshot is not
+  // saved at all.
   let fallbackNeeded = false;
 
   try {
@@ -400,7 +399,7 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
       phase: "capturing",
       updatedAt: Date.now(),
     });
-    await postLink(
+    const link = await postLink(
       msg.baseUrl,
       msg.uploadImage,
       msg.data,
@@ -417,11 +416,25 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
       }
     );
     await setSingleFileProgress(null);
+
+    if (fallbackNeeded) {
+      // verifyDerivedFormats only reports "unavailable" formats when the
+      // uploaded snapshot never landed: the SingleFile upload failed.
+      // Delete the link so nothing is saved without its snapshot.
+      const linkId = link?.data?.response?.id;
+      if (linkId !== undefined && linkId !== null) {
+        try {
+          await deleteLinkFetch(msg.baseUrl, linkId, msg.apiKey);
+        } catch (error) {
+          console.error("Failed to delete the link after a failed upload:", error);
+        }
+      }
+      notify("Linkwarden", uploadFailedMessage);
+      return;
+    }
+
     if (msg.tabId !== undefined) await updateBadge(msg.tabId, true);
-    notify(
-      "Linkwarden",
-      fallbackNeeded ? partialSavedMessage : savedMessage
-    );
+    notify("Linkwarden", savedMessage);
   } catch (error) {
     await setSingleFileProgress(null);
     console.error(error);

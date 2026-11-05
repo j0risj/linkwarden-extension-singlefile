@@ -342,6 +342,36 @@ async function reportOutcome(
   await setSingleFileResult({ status, message, tabId, updatedAt: Date.now() });
 }
 
+// A pending runtime.onMessage promise does NOT keep an MV3 service worker
+// alive; the worker can be killed mid-save, which silently dropped the
+// outcome notification. A repeating alarm wakes the worker every 30s and
+// resets its idle timer for the duration of the save.
+const SAVE_KEEPALIVE_ALARM = "lw-singlefile-save";
+
+browser.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== SAVE_KEEPALIVE_ALARM) return;
+  // The alarm firing is enough to reset the idle timer; nothing else to do.
+});
+
+async function startSaveKeepalive() {
+  try {
+    await browser.alarms.create(SAVE_KEEPALIVE_ALARM, {
+      periodInMinutes: 0.5,
+    });
+  } catch {
+    // Older Chrome builds enforce a 1 minute minimum period.
+    await browser.alarms.create(SAVE_KEEPALIVE_ALARM, { periodInMinutes: 1 });
+  }
+}
+
+async function stopSaveKeepalive() {
+  try {
+    await browser.alarms.clear(SAVE_KEEPALIVE_ALARM);
+  } catch {
+    // Best effort.
+  }
+}
+
 browser.runtime.onMessage.addListener(async (message: unknown) => {
   // Progress events from the injected single-file-core capture script. They
   // arrive while a save is running in this worker; keep them in storage so a
@@ -407,6 +437,7 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
   let fallbackNeeded = false;
 
   try {
+    await startSaveKeepalive();
     await setSingleFileProgress({
       active: true,
       phase: "capturing",
@@ -457,6 +488,8 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
       ? partialFailedMessage(reason)
       : failedMessage(reason);
     await reportOutcome(linkSaved ? "partial" : "failed", message, msg.tabId);
+  } finally {
+    await stopSaveKeepalive();
   }
 });
 

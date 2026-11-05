@@ -44,7 +44,9 @@ import {
 } from "../lib/messages.ts";
 import {
   getSingleFileProgress,
+  getSingleFileResult,
   SINGLEFILE_PROGRESS_KEY,
+  SINGLEFILE_RESULT_KEY,
 } from "../lib/singlefileProgress.ts";
 
 // The popup is torn down every time it loses focus, so remember whether the
@@ -211,8 +213,22 @@ const BookmarkForm = () => {
       changes: Record<string, unknown>,
       areaName: string
     ) => {
-      if (areaName !== "local" || !(SINGLEFILE_PROGRESS_KEY in changes)) return;
-      void syncProgress();
+      if (areaName !== "local") return;
+      if (SINGLEFILE_PROGRESS_KEY in changes) void syncProgress();
+      // The background save finished while this popup is open: show the
+      // outcome as a toast too (a desktop notification is always sent).
+      if (SINGLEFILE_RESULT_KEY in changes) {
+        void getSingleFileResult().then((result) => {
+          if (!result) return;
+          if (Date.now() - result.updatedAt > 60_000) return;
+          if (result.tabId !== undefined && result.tabId !== tabInfo?.id) return;
+          toast({
+            title: "Linkwarden",
+            description: result.message,
+            variant: result.status === "failed" ? "destructive" : "success",
+          });
+        });
+      }
     };
     getBrowser().storage.onChanged.addListener(onStorageChanged);
 

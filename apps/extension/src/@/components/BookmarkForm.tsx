@@ -170,17 +170,9 @@ const BookmarkForm = () => {
     },
     onSuccess: () => {
       if (saveSingleFile) {
-        // The background worker finishes the save; the badge and a
-        // notification are handled there.
-        toast({
-          title: "Saving in background",
-          description:
-            "You can switch tabs now — the SingleFile capture will finish in the background.",
-          variant: "success",
-        });
-        setTimeout(() => {
-          window.close();
-        }, 1200);
+        // The background worker finishes the save. Keep the popup open so
+        // the progress overlay and the result toast (delivered via storage)
+        // are visible; the popup closes once the result arrives.
         return;
       }
       // Update badge to show link is saved
@@ -213,27 +205,34 @@ const BookmarkForm = () => {
     };
     void syncProgress();
 
+    // Show the outcome of a background SingleFile save as a toast (a desktop
+    // notification is always sent too), then close the popup shortly after.
+    const showResult = async () => {
+      const result = await getSingleFileResult();
+      if (!result) return;
+      if (Date.now() - result.updatedAt > 60_000) return;
+      if (result.tabId !== undefined && result.tabId !== tabInfoRef.current?.id)
+        return;
+      toast({
+        title: "Linkwarden",
+        description: result.message,
+        variant: result.status === "failed" ? "destructive" : "success",
+      });
+      setTimeout(() => {
+        window.close();
+      }, 3500);
+    };
+    // Also surface a fresh result when the popup is (re)opened after the
+    // save already finished.
+    void showResult();
+
     const onStorageChanged = (
       changes: Record<string, unknown>,
       areaName: string
     ) => {
       if (areaName !== "local") return;
       if (SINGLEFILE_PROGRESS_KEY in changes) void syncProgress();
-      // The background save finished while this popup is open: show the
-      // outcome as a toast too (a desktop notification is always sent).
-      if (SINGLEFILE_RESULT_KEY in changes) {
-        void getSingleFileResult().then((result) => {
-          if (!result) return;
-          if (Date.now() - result.updatedAt > 60_000) return;
-          if (result.tabId !== undefined && result.tabId !== tabInfoRef.current?.id)
-            return;
-          toast({
-            title: "Linkwarden",
-            description: result.message,
-            variant: result.status === "failed" ? "destructive" : "success",
-          });
-        });
-      }
+      if (SINGLEFILE_RESULT_KEY in changes) void showResult();
     };
     getBrowser().storage.onChanged.addListener(onStorageChanged);
 

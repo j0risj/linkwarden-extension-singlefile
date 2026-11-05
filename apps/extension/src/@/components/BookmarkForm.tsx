@@ -24,7 +24,7 @@ import {
   setStorageItem,
   updateBadge,
 } from "../lib/utils.ts";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { getConfig, isConfigured as getIsConfigured } from "../lib/config.ts";
 import { checkLinkExists, postLink } from "../lib/actions/links.ts";
@@ -81,6 +81,10 @@ const BookmarkForm = () => {
     title: string | undefined;
     url: string | undefined;
   }>();
+  // The storage listener below is registered once, so it must read the
+  // current tab through a ref instead of the stale initial closure value.
+  const tabInfoRef = useRef(tabInfo);
+  tabInfoRef.current = tabInfo;
 
   const handleCheckedChange = (s: boolean | "indeterminate") => {
     if (s === "indeterminate") return;
@@ -221,7 +225,8 @@ const BookmarkForm = () => {
         void getSingleFileResult().then((result) => {
           if (!result) return;
           if (Date.now() - result.updatedAt > 60_000) return;
-          if (result.tabId !== undefined && result.tabId !== tabInfo?.id) return;
+          if (result.tabId !== undefined && result.tabId !== tabInfoRef.current?.id)
+            return;
           toast({
             title: "Linkwarden",
             description: result.message,
@@ -270,6 +275,27 @@ const BookmarkForm = () => {
   }, []);
 
   const { handleSubmit, control } = form;
+
+  // useEffect(() => {
+  //   const syncBookmarks = async () => {
+  //     try {
+  //       const { syncBookmarks, baseUrl, defaultCollection } = await getConfig();
+  //       form.setValue('collection', {
+  //         name: defaultCollection,
+  //       });
+  //       if (!syncBookmarks) {
+  //         return;
+  //       }
+  //       if (await isConfigured()) {
+  //         await saveLinksInCache(baseUrl);
+  //         await syncLocalBookmarks(baseUrl);
+  //       }
+  //     } catch (error) {
+  //       console.error(error);
+  //     }
+  //   };
+  //   syncBookmarks();
+  // }, [form]);
 
   const {
     isLoading: loadingCollections,
